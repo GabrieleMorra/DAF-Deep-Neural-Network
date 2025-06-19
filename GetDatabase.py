@@ -11,10 +11,12 @@ def get_database(nn):
     m, n       = data.shape
 
     # if data has non-numeric columns, convert them to numeric random between 0 and 1
-    for col in data.columns:
-        if not pd.api.types.is_numeric_dtype(data[col]):
-            data[col] = np.random.rand(m)
-
+    for i in range(n):
+        try:
+            data[:, i].astype(float)
+        except ValueError:
+            data[:, i] = np.random.rand(m)
+            
     max_data   = np.amax(data, axis=0)
     min_data   = np.amin(data, axis=0)
 
