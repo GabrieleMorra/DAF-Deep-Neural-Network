@@ -10,6 +10,11 @@ def get_database(nn):
     # Mix data to avoid bias
     m, n       = data.shape
 
+    # if data has non-numeric columns, convert them to numeric random between 0 and 1
+    for i in range(n):
+        if not np.issubdtype(data[:, i].dtype, np.number):
+            data[:, i] = np.random.rand(m)
+
     max_data   = np.amax(data, axis=0)
     min_data   = np.amin(data, axis=0)
 
