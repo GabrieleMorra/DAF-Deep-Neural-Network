@@ -1,15 +1,15 @@
 {
     "NeuralNetworkModel": {
-        "loss": "LC", 
+        "loss": "MSE", 
         "UpdateMethod": "Adam",
-        "learning_rate": 5E-4,
+        "learning_rate": 5E-3,
         "training_testing_ratio": 0.80,
         "epochs": 50000,
-        "inputEntryIndices": [0, 1, 2, 3, 5, 6, 7, 8],
-        "outputEntryIndices": [10, 11, 12],
-        "InputFileName": "risultati.csv",
+        "inputEntryIndices": [0, 4, 5, 6, 7, 8, 9, 10],
+        "outputEntryIndices": [1, 2, 3],
+        "InputFileName": "risultatiEppler.csv",
         "OutputFileName": "DNN",
-        "ShowTestEvery": 500
+        "ShowTestEvery": 200
     },
     "FirstHiddenLayer": {
         "neurons": 13, "activation": "elu"
@@ -18,9 +18,6 @@
         "neurons": 13, "activation": "elu" 
     },
     "ThirdHiddenLayer":{
-        "neurons": 13, "activation": "elu" 
-    },
-    "FourthHiddenLayer":{
         "neurons": 13, "activation": "elu" 
     },
     "OutputLayer": {
