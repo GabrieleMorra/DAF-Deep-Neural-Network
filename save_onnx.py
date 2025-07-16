@@ -2,10 +2,12 @@ import onnx
 import numpy as np
 from onnx import helper, TensorProto
 
-def save_onnx(params_values, network_layers, input_shape, output_file):
+def save_onnx(nn, database, params_values, network_layers, input_shape, output_file):
     """
-    Save the neural network in ONNX file format.
+    Save the neural network in ONNX file format with normalization/denormalization.
 
+    :param nn: Neural network model dictionary
+    :param database: Database containing min/max values for normalization
     :param params_values: Dictionary containing the parameters of the neural network.
     :param network_layers: Dictionary defining the structure of the neural network.
     :param input_shape: Tuple representing the shape of the input data.
@@ -17,12 +19,58 @@ def save_onnx(params_values, network_layers, input_shape, output_file):
     inputs = []
     outputs = []
 
-    # Define the input tensor
-    input_tensor = helper.make_tensor_value_info('input', TensorProto.FLOAT, input_shape)
+    # Get indices for input and output
+    input_indices = nn["NeuralNetworkModel"]["inputEntryIndices"]
+    output_indices = nn["NeuralNetworkModel"]["outputEntryIndices"]
+    
+    # Get min/max values for normalization (same values used during training)
+    min_data = database['min_data']
+    max_data = database['max_data']
+    
+    # Extract min/max for input and output using the same global normalization
+    input_min = min_data[input_indices]
+    input_max = max_data[input_indices]
+    output_min = min_data[output_indices]
+    output_max = max_data[output_indices]
+    
+    # Calculate normalization parameters
+    input_range = input_max - input_min
+    output_range = output_max - output_min
+    
+    # Define the input tensor (raw, unnormalized)
+    input_tensor = helper.make_tensor_value_info('raw_input', TensorProto.FLOAT, input_shape)
     inputs.append(input_tensor)
 
+    # Add normalization constants as initializers (only the ones we actually use)
+    initializers.append(helper.make_tensor('input_min', TensorProto.FLOAT, input_min.shape, input_min.flatten()))
+    initializers.append(helper.make_tensor('input_range', TensorProto.FLOAT, input_range.shape, input_range.flatten()))
+    
+    initializers.append(helper.make_tensor('output_min', TensorProto.FLOAT, output_min.shape, output_min.flatten()))
+    initializers.append(helper.make_tensor('output_range', TensorProto.FLOAT, output_range.shape, output_range.flatten()))
+
+    # INPUT NORMALIZATION: (data - min_data) / (max_data - min_data)
+    # Step 1: Subtract min from raw input
+    sub_node = helper.make_node(
+        'Sub',
+        ['raw_input', 'input_min'],
+        ['input_sub_min'],
+        name='input_subtract_min'
+    )
+    nodes.append(sub_node)
+    
+    # Step 2: Divide by range to get normalized input
+    div_node = helper.make_node(
+        'Div',
+        ['input_sub_min', 'input_range'],
+        ['normalized_input'],
+        name='input_normalize'
+    )
+    nodes.append(div_node)
+
+    # NEURAL NETWORK LAYERS
     # Iterate through the layers to create ONNX nodes
-    prev_output = 'input'
+    prev_output = 'normalized_input'
+
     for i, (layer_name, layer) in enumerate(network_layers.items()):
         weight_name = f"{layer_name}_W"
         bias_name = f"{layer_name}_B"
@@ -85,8 +133,27 @@ def save_onnx(params_values, network_layers, input_shape, output_file):
         nodes.append(activation_node)
         prev_output = output_name
 
-    # Define the output tensor
-    output_tensor = helper.make_tensor_value_info(prev_output, TensorProto.FLOAT, [None, network_layers[list(network_layers.keys())[-1]]['output_dim']])
+    # OUTPUT DENORMALIZATION: normalized_output * (max_data - min_data) + min_data
+    # Step 1: Multiply normalized output by range
+    mul_node = helper.make_node(
+        'Mul',
+        [prev_output, 'output_range'],
+        ['output_mul_range'],
+        name='output_multiply_range'
+    )
+    nodes.append(mul_node)
+    
+    # Step 2: Add min to get denormalized output
+    add_min_node = helper.make_node(
+        'Add',
+        ['output_mul_range', 'output_min'],
+        ['final_output'],
+        name='output_add_min'
+    )
+    nodes.append(add_min_node)
+
+    # Define the output tensor (raw, denormalized)
+    output_tensor = helper.make_tensor_value_info('final_output', TensorProto.FLOAT, [None, len(output_indices)])
     outputs.append(output_tensor)
 
     # Create the graph

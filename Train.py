@@ -4,7 +4,7 @@ from GetLossValue import get_mean_loss
 from FullBackwardProp import full_backward_propagation
 from UpdateParams import weights_update
 from Test import test
-# from save_onnx import save_onnx
+from save_onnx import save_onnx
 
 import pickle
 import numpy as np
@@ -83,11 +83,11 @@ def TrainNeuralNetwork(nn, database):
     }
 
     # Save the data in a pickle file
-    with open(nn["NeuralNetworkModel"]["OutputFileName"]+'.pkl', 'wb') as f:
-        pickle.dump(data, f)
+    # with open(nn["NeuralNetworkModel"]["OutputFileName"]+'.pkl', 'wb') as f:
+    #     pickle.dump(data, f)
 
     # Save the data in an onnx file
-    # save_onnx(params_values, network_layers, (1, len(inputEntryIndices)), nn["NeuralNetworkModel"]["OutputFileName"]+'.onnx')
+    save_onnx(nn, database, params_values, network_layers, (1, len(inputEntryIndices)), nn["NeuralNetworkModel"]["OutputFileName"]+'.onnx')
 
     # Final log message
 

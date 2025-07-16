@@ -1,13 +1,13 @@
 {
     "NeuralNetworkModel": {
-        "loss": "LC", 
+        "loss": "MSE", 
         "UpdateMethod": "Adam",
-        "learning_rate": 5E-3,
+        "learning_rate": 5E-4,
         "training_testing_ratio": 0.80,
-        "epochs": 50000,
-        "inputEntryIndices": [2, 6, 7, 8, 9, 10, 11, 12],
-        "outputEntryIndices": [3, 4, 5],
-        "InputFileName": "risultatiEppler.csv",
+        "epochs": 30000,
+        "inputEntryIndices": [0, 1, 2, 3, 4, 5, 6, 7],
+        "outputEntryIndices": [8, 9, 10],
+        "InputFileName": "risultati2D.csv",
         "OutputFileName": "DNN",
         "ShowTestEvery": 200
     },
