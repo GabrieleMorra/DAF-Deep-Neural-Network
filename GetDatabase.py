@@ -3,7 +3,7 @@ import numpy as np
 
 def get_database(nn):
     # Loading the data
-    data       = pd.read_csv(nn["NeuralNetworkModel"]["InputFileName"], delimiter=";")
+    data       = pd.read_csv(nn["NeuralNetworkModel"]["InputFileName"], delimiter=nn["NeuralNetworkModel"]["Delimiter"])
     headers    = data.columns
     data       = np.array(data)
     

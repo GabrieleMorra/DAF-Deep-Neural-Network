@@ -1,24 +1,25 @@
 {
     "NeuralNetworkModel": {
-        "loss": "MSE", 
+        "loss": "LC", 
         "UpdateMethod": "Adam",
-        "learning_rate": 5E-4,
+        "learning_rate": 1E-3,
         "training_testing_ratio": 0.80,
-        "epochs": 30000,
-        "inputEntryIndices": [0, 1, 2, 3, 4, 5, 6, 7],
-        "outputEntryIndices": [8, 9, 10],
-        "InputFileName": "risultati2D.csv",
-        "OutputFileName": "DNN",
-        "ShowTestEvery": 200
+        "epochs": 7500,
+        "inputEntryIndices": [1, 2, 3, 5, 6, 7],
+        "outputEntryIndices": [25, 31, 33, 35, 37, 39, 43, 45],
+        "InputFileName": "DatasetMean.csv",
+        "Delimiter": ",",
+        "OutputFileName": "DNN_Mick",
+        "ShowTestEvery": 250
     },
     "FirstHiddenLayer": {
-        "neurons": 13, "activation": "elu"
+        "neurons": 35, "activation": "elu"
     },
     "SecondHiddenLayer":{
-        "neurons": 13, "activation": "elu" 
+        "neurons": 35, "activation": "elu" 
     },
-    "ThirdHiddenLayer":{
-        "neurons": 13, "activation": "elu" 
+    "ThirdHiddenLayer": {
+        "neurons": 35, "activation": "elu"
     },
     "OutputLayer": {
         "activation": "tanh"
