@@ -22,6 +22,7 @@ def get_database(nn):
 
     # Normalising input and splitting data into training and validation sets
     data = (data - min_data) / (max_data - min_data)
+    np.random.seed(42)  # Set seed for reproducible shuffling
     np.random.shuffle(data)
     id_train = np.round(nn["NeuralNetworkModel"]["training_testing_ratio"]*m).astype(int)
 

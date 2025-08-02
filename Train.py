@@ -18,7 +18,7 @@ def train_fidelity_r2(y_true, y_pred):
     return max(0, r2 * 100)  # Impedisce valori negativi
 
 
-def TrainNeuralNetwork(nn, database):
+def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None):
 
     X                   = database['X_train']
     Y                   = database['Y_train']
@@ -32,6 +32,7 @@ def TrainNeuralNetwork(nn, database):
     inputEntryIndices   = nn["NeuralNetworkModel"]['inputEntryIndices']
     headers             = database['headers']
     ShowEvery           = nn["NeuralNetworkModel"]['ShowTestEvery']
+    silent_mode         = nn["NeuralNetworkModel"].get('silent_mode', False)
     
     network_layers = dict(islice(nn.items(), 1, None))
 
@@ -55,10 +56,14 @@ def TrainNeuralNetwork(nn, database):
         params_values, previous_grads_values, _, m, v, t  = weights_update(params_values, grads_values, nn, learning_rate, previous_grads_values, momentum, m, v, t)
 
         training_fidelity  = train_fidelity_r2(Y, Y_hat)
-        accuracy_per_variable, validation_fidelity = test(X_valid, Y_valid, params_values, network_layers, mean_loss, momentum, i, min_data, max_data, outputEntryIndices, training_fidelity, ShowEvery)
+        accuracy_per_variable, validation_fidelity, r2_per_variable = test(X_valid, Y_valid, params_values, network_layers, mean_loss, momentum, i, min_data, max_data, outputEntryIndices, training_fidelity, ShowEvery, silent_mode)
 
         momentum_history.append(momentum)
         loss_history.append(mean_loss)
+        
+        # Send data for real-time plotting if available
+        if data_queue is not None and model_id is not None and i % ShowEvery == 0:
+            data_queue.put((model_id, i, r2_per_variable))
         
     # Calcolo il tempo di esecuzione del training
     end_time = time.time()
@@ -103,27 +108,34 @@ def TrainNeuralNetwork(nn, database):
     )
 
     # Scrivi su terminale tutti i risultati ottenuti:
-    print("\nTraining completed successfully"
-    "\n\n"
-    "The neural network has been trained with the following parameters:\n"
-    f"{'Training method:':<{dim1}} {nn['NeuralNetworkModel']['UpdateMethod']}\n"
-    f"{'Epochs:':<{dim1}} {epochs}\n"
-    f"{'Learning rate:':<{dim1}} {learning_rate:.2E}\n"
-    f"{'Loss function:':<{dim1}} {nn['NeuralNetworkModel']['loss']}\n"
-    f"{'Training/testing ratio:':<{dim1}} {nn['NeuralNetworkModel']['training_testing_ratio']}\n"
-    f"{'Number of hidden layers:':<{dim1}} {len(network_layers)-1}\n"
-    f"{'Number of neurons:':<{dim1}} {', '.join(str(layer['output_dim']) for layer in list(network_layers.values())[:-1])}\n"
-    f"{'Activation functions:':<{dim1}} {', '.join(layer['activation'] for layer in network_layers.values())}\n"
-    "\n"
-    "The following results have been obtained:\n"
-    f"Training fidelity      : {training_fidelity:.3f}%\n"
-    f"Validation fidelity    : {validation_fidelity:.3f}%\n"
-    f"Mean loss function     : {mean_loss:.2E}\n"
-    f"Elapsed time           : {elapsed_time}\n"
-    f"R² score per variabile :\n" + "\n".join(f"\t{header}: {acc:.2f}%" for header, acc in zip(database['headers'][outputEntryIndices], accuracy_per_variable)) + "\n"
-    "\n"
-    "End of the program"
-    )
+    if not silent_mode:
+        print("\nTraining completed successfully"
+        "\n\n"
+        "The neural network has been trained with the following parameters:\n"
+        f"{'Training method:':<{dim1}} {nn['NeuralNetworkModel']['UpdateMethod']}\n"
+        f"{'Epochs:':<{dim1}} {epochs}\n"
+        f"{'Learning rate:':<{dim1}} {learning_rate:.2E}\n"
+        f"{'Loss function:':<{dim1}} {nn['NeuralNetworkModel']['loss']}\n"
+        f"{'Training/testing ratio:':<{dim1}} {nn['NeuralNetworkModel']['training_testing_ratio']}\n"
+        f"{'Number of hidden layers:':<{dim1}} {len(network_layers)-1}\n"
+        f"{'Number of neurons:':<{dim1}} {', '.join(str(layer['output_dim']) for layer in list(network_layers.values())[:-1])}\n"
+        f"{'Activation functions:':<{dim1}} {', '.join(layer['activation'] for layer in network_layers.values())}\n"
+        "\n"
+        "The following results have been obtained:\n"
+        f"Training fidelity      : {training_fidelity:.3f}%\n"
+        f"Validation fidelity    : {validation_fidelity:.3f}%\n"
+        f"Mean loss function     : {mean_loss:.2E}\n"
+        f"Elapsed time           : {elapsed_time}\n"
+        f"R² score per variabile :\n" + "\n".join(f"\t{header}: {acc:.2f}%" for header, acc in zip(database['headers'][outputEntryIndices], accuracy_per_variable)) + "\n"
+        "\n"
+        "End of the program"
+        )
 
-
-    return 
+    return {
+        'training_fidelity': training_fidelity,
+        'validation_fidelity': validation_fidelity,
+        'mean_loss': mean_loss,
+        'elapsed_time': elapsed_time,
+        'accuracy_per_variable': accuracy_per_variable,
+        'r2_per_variable': r2_per_variable
+    } 

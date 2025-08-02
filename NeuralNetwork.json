@@ -2,24 +2,21 @@
     "NeuralNetworkModel": {
         "loss": "LC", 
         "UpdateMethod": "Adam",
-        "learning_rate": 1E-3,
+        "learning_rate": 7.5E-4,
         "training_testing_ratio": 0.80,
-        "epochs": 7500,
-        "inputEntryIndices": [1, 2, 3, 5, 6, 7],
-        "outputEntryIndices": [25, 31, 33, 35, 37, 39, 43, 45],
-        "InputFileName": "DatasetMean.csv",
+        "epochs": 30000,
+        "inputEntryIndices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "outputEntryIndices": [13],
+        "InputFileName": "Boston_Housing.csv",
         "Delimiter": ",",
-        "OutputFileName": "DNN_Mick",
+        "OutputFileName": "Trained_DNN",
         "ShowTestEvery": 250
     },
     "FirstHiddenLayer": {
-        "neurons": 35, "activation": "elu"
+        "neurons": 8, "activation": "elu"
     },
-    "SecondHiddenLayer":{
-        "neurons": 35, "activation": "elu" 
-    },
-    "ThirdHiddenLayer": {
-        "neurons": 35, "activation": "elu"
+    "SecondHiddenLayer": {
+        "neurons": 8, "activation": "elu"
     },
     "OutputLayer": {
         "activation": "tanh"
