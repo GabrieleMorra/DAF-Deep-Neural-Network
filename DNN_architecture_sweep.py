@@ -14,11 +14,21 @@ from GetDatabase import get_database
 from Train import TrainNeuralNetwork
 from queue import Queue
 import pickle
+import psutil
+import gc
 
-def run_model_threaded(first_hidden_neurons, second_hidden_neurons, total_layers, database, sweep_config, results_queue, data_queue, onnx_dir="trained_onnx_models"):
-    # total_layers: 2 = Input + FirstHidden + Output, 3 = Input + FirstHidden + SecondHidden + Output
-    hidden_layers = total_layers - 1  # Subtract output layer
-    model_id = f"{first_hidden_neurons}_{second_hidden_neurons}_{total_layers}L"
+def run_model_threaded(layer_neurons, database, sweep_config, results_queue, data_queue, onnx_dir="trained_onnx_models"):
+    # layer_neurons is a list: [n1, n2, n3, ..., 0, 0, total_layers]
+    # Extract total_layers (last element) and active neuron counts
+    total_layers = layer_neurons[-1]
+    active_neurons = layer_neurons[:-1][:total_layers]  # Only take the first total_layers neurons
+    
+    # Generate appropriate model_id based on architecture
+    if total_layers == 1:
+        model_id = f"{active_neurons[0]}"  # Single layer: "5", "10", etc.
+    else:
+        model_id = "x".join(map(str, active_neurons))  # Multiple layers: "5x10", "5x10x15", etc.
+    
     if not sweep_config["NeuralNetworkModel"].get("silent_mode", False):
         print(f"[TRAINING] Starting model configuration: {model_id}")
     
@@ -28,23 +38,30 @@ def run_model_threaded(first_hidden_neurons, second_hidden_neurons, total_layers
     }
     
     # Set output file path in ONNX directory
-    config["NeuralNetworkModel"]["OutputFileName"] = os.path.join(onnx_dir, f"Trained_DNN_{model_id}")
+    config["NeuralNetworkModel"]["OutputFileName"] = os.path.join(onnx_dir, f"DNN_{model_id}")
     
     # Note: InputLayer is not defined in LayerTemplate anymore, it's handled automatically by the network
     # We only define the hidden layers and output layer
     
-    # Add hidden layers based on total_layers
-    # total_layers = 2: Input + FirstHidden + Output
-    # total_layers = 3: Input + FirstHidden + SecondHidden + Output
-    config["HiddenLayer1"] = {
-        "neurons": first_hidden_neurons, 
-        "activation": sweep_config["LayerTemplate"]["FirstHiddenLayer"]["activation"]
-    }
-    
-    if hidden_layers > 1:  # Add second hidden layer for 3-layer networks
-        config["HiddenLayer2"] = {
-            "neurons": second_hidden_neurons, 
-            "activation": sweep_config["LayerTemplate"]["SecondHiddenLayer"]["activation"]
+    # Add hidden layers generically based on total_layers
+    for i, neurons in enumerate(active_neurons):
+        layer_num = i + 1
+        # Try to get layer-specific activation, fallback to generic or first layer
+        layer_key = f"HiddenLayer{layer_num}"
+        template_key = f"HiddenLayer{layer_num}"
+        
+        # Fallback chain for activation function
+        activation = None
+        if template_key in sweep_config["LayerTemplate"]:
+            activation = sweep_config["LayerTemplate"][template_key]["activation"]
+        elif "FirstHiddenLayer" in sweep_config["LayerTemplate"]:
+            activation = sweep_config["LayerTemplate"]["FirstHiddenLayer"]["activation"]
+        else:
+            activation = "elu"  # Default fallback
+        
+        config[layer_key] = {
+            "neurons": neurons,
+            "activation": activation
         }
     
     config["OutputLayer"] = {
@@ -54,6 +71,19 @@ def run_model_threaded(first_hidden_neurons, second_hidden_neurons, total_layers
     # Converti al formato richiesto da TrainNeuralNetwork
     nnModel = convert_json_format(config)
     
+    # Debug: Print actual architecture (always show for debugging)
+    layers_info = []
+    for key, value in config.items():
+        if "Layer" in key and key != "NeuralNetworkModel":
+            if "neurons" in value:
+                layers_info.append(f"{key}: {value['neurons']} neurons")
+            else:
+                layers_info.append(f"{key}: output layer")
+    print(f"[ARCH DEBUG] {model_id} → {' | '.join(layers_info)}")
+    
+    # Also debug the input parameters
+    print(f"[PARAMS DEBUG] {model_id} → neurons: {active_neurons}, total_layers: {total_layers}")
+    
     try:
         # Chiama direttamente TrainNeuralNetwork invece di subprocess
         result = TrainNeuralNetwork(nnModel, database, model_id, data_queue)
@@ -62,18 +92,34 @@ def run_model_threaded(first_hidden_neurons, second_hidden_neurons, total_layers
         data_queue.put((model_id, 'COMPLETED'))
         
         results_queue.put((model_id, True, result))
-        if not sweep_config["NeuralNetworkModel"].get("silent_mode", False):
-            print(f"[COMPLETED] Model {model_id} - Validation R²: {result['validation_fidelity']:.2f}%")
+        print(f"[COMPLETED] Model {model_id} - Validation R²: {result['validation_fidelity']:.2f}%")
+        
+        # Explicit cleanup to free memory
+        del nnModel, config
+        import gc
+        gc.collect()
+        
         return True
         
     except Exception as e:
         # Send error signal to GUI
         data_queue.put((model_id, 'ERROR'))
         
-        if not sweep_config["NeuralNetworkModel"].get("silent_mode", False):
-            print(f"[ERROR] Model {model_id} failed: {str(e)}")
+        print(f"[ERROR] Model {model_id} failed: {str(e)}")
         results_queue.put((model_id, False, None))
+        
+        # Cleanup even on error
+        try:
+            del nnModel, config
+        except:
+            pass
+        import gc
+        gc.collect()
+        
         return False
+    finally:
+        # Final cleanup regardless of outcome
+        print(f"[THREAD] Thread for {model_id} cleaning up and releasing resources")
 
 class RealTimeGUIWrapper:
     def __init__(self, param_combinations, max_epochs=15000):
@@ -179,9 +225,25 @@ def run_sweep_threading():
     with open("NeuralNetworkSweep.json", "r") as f:
         sweep_config = json.load(f)
     
-    first_hidden_neurons_range = sweep_config["SweepConfiguration"]["first_hidden_neurons_range"]
-    second_hidden_neurons_range = sweep_config["SweepConfiguration"]["second_hidden_neurons_range"]
+    # Generic approach: support any number of hidden layers
+    hidden_layers_config = []
+    layer_num = 1
+    while f"hidden_layer_{layer_num}_neurons_range" in sweep_config["SweepConfiguration"]:
+        hidden_layers_config.append(sweep_config["SweepConfiguration"][f"hidden_layer_{layer_num}_neurons_range"])
+        layer_num += 1
+    
+    # Fallback to old format for backward compatibility
+    if not hidden_layers_config:
+        hidden_layers_config = [
+            sweep_config["SweepConfiguration"]["first_hidden_neurons_range"],
+            sweep_config["SweepConfiguration"]["second_hidden_neurons_range"],
+            sweep_config["SweepConfiguration"].get("third_hidden_neurons_range", [])
+        ]
+        # Remove empty configs
+        hidden_layers_config = [config for config in hidden_layers_config if config]
+    
     total_layers_range = sweep_config["SweepConfiguration"]["total_layers_range"]
+    max_hidden_layers = len(hidden_layers_config)
     max_threads = sweep_config["SweepConfiguration"]["max_threads"]
     print("\n" + "="*80)
     print("           NEURAL NETWORK ARCHITECTURE SWEEP")
@@ -198,40 +260,51 @@ def run_sweep_threading():
     base_nn = convert_json_format(temp_config)
     database = get_database(base_nn)
     
-    # Crea tutte le combinazioni di parametri
-    all_combinations = list(product(first_hidden_neurons_range, second_hidden_neurons_range, total_layers_range))
-    
-    # Filter out duplicate architectures for 2-layer networks
+    # Create unique combinations efficiently for any number of layers
     unique_combinations = []
-    seen_architectures = set()
     
-    for first_hidden, second_hidden, total_layers in all_combinations:
-        hidden_layers = total_layers - 1
-        
-        # Create architecture identifier
-        if hidden_layers == 1:
-            arch_id = f"{first_hidden}"  # Only first hidden layer matters for 1-layer networks
-            # For 1-layer networks, use any second_hidden value (we'll use the first one we see)
-            if arch_id not in seen_architectures:
-                unique_combinations.append((first_hidden, second_hidden, total_layers))
-                seen_architectures.add(arch_id)
-        else:
-            arch_id = f"{first_hidden}x{second_hidden}"  # Both layers matter for 2-layer networks
-            if arch_id not in seen_architectures:
-                unique_combinations.append((first_hidden, second_hidden, total_layers))
-                seen_architectures.add(arch_id)
+    for num_layers in total_layers_range:
+        if num_layers <= max_hidden_layers:
+            # Generate all combinations for this number of layers
+            if num_layers == 1:
+                for neurons in hidden_layers_config[0]:
+                    unique_combinations.append([neurons] + [0] * (max_hidden_layers - 1) + [num_layers])
+            elif num_layers == 2:
+                for n1 in hidden_layers_config[0]:
+                    for n2 in hidden_layers_config[1]:
+                        unique_combinations.append([n1, n2] + [0] * (max_hidden_layers - 2) + [num_layers])
+            elif num_layers == 3:
+                for n1 in hidden_layers_config[0]:
+                    for n2 in hidden_layers_config[1]:
+                        for n3 in hidden_layers_config[2]:
+                            unique_combinations.append([n1, n2, n3] + [0] * (max_hidden_layers - 3) + [num_layers])
+            # Add more cases as needed, or make it completely dynamic
+            else:
+                # Dynamic approach for any number of layers
+                from itertools import product
+                ranges = hidden_layers_config[:num_layers]
+                for combination in product(*ranges):
+                    config = list(combination) + [0] * (max_hidden_layers - num_layers) + [num_layers]
+                    unique_combinations.append(config)
     
     param_combinations = unique_combinations
     
-    print(f"[FILTER] Original combinations: {len(all_combinations)}")
+    # Calculate what would have been generated with the old method for comparison
+    all_combinations_count = 1
+    for layer_config in hidden_layers_config:
+        all_combinations_count *= len(layer_config)
+    all_combinations_count *= len(total_layers_range)
+    
+    print(f"[FILTER] Potential combinations (naive approach): {all_combinations_count}")
     print(f"[FILTER] Unique architectures: {len(param_combinations)}")
-    print(f"[FILTER] Eliminated {len(all_combinations) - len(param_combinations)} duplicate architectures")
+    print(f"[FILTER] Eliminated {all_combinations_count - len(param_combinations)} duplicate architectures")
     
     print(f"[SWEEP] Starting sweep with {len(param_combinations)} model configurations")
     print(f"[CONFIG] Max threads: {max_threads}")
-    print(f"[CONFIG] First hidden neurons range: {first_hidden_neurons_range}")
-    print(f"[CONFIG] Second hidden neurons range: {second_hidden_neurons_range}")
-    print(f"[CONFIG] Total layers range: {total_layers_range} (Input + Hidden + Output)")
+    for i, layer_config in enumerate(hidden_layers_config):
+        print(f"[CONFIG] Hidden layer {i+1} neurons range: {layer_config}")
+    print(f"[CONFIG] Total layers range: {total_layers_range} (Hidden + Output)")
+    print(f"[CONFIG] Max hidden layers supported: {max_hidden_layers}")
     
     # Initialize communication queues
     results_queue = Queue()
@@ -279,17 +352,22 @@ def run_sweep_threading():
         
         print(f"[POOL] Submitting {len(param_combinations)} training tasks to thread pool...")
         
-        for i, (first_hidden_neurons, second_hidden_neurons, total_layers) in enumerate(param_combinations):
+        for i, layer_config in enumerate(param_combinations):
             future = executor.submit(
                 run_model_threaded, 
-                first_hidden_neurons, second_hidden_neurons, total_layers, 
+                layer_config, 
                 database, sweep_config, results_queue, data_queue, onnx_dir
             )
-            future_to_config[future] = (first_hidden_neurons, second_hidden_neurons, total_layers)
+            future_to_config[future] = layer_config
             
             # Log when first batch starts
             if i < max_threads:
-                model_id = f"{first_hidden_neurons}_{second_hidden_neurons}_{total_layers}L"
+                total_layers = layer_config[-1]
+                active_neurons = layer_config[:-1][:total_layers]
+                if total_layers == 1:
+                    model_id = f"{active_neurons[0]}"
+                else:
+                    model_id = "x".join(map(str, active_neurons))
                 print(f"[START] Model {model_id} starting in thread pool")
         
         # Process completed tasks as they finish
@@ -301,14 +379,27 @@ def run_sweep_threading():
         
         for future in as_completed(future_to_config):
             config = future_to_config[future]
-            first_h, second_h, layers = config
-            model_id = f"{first_h}_{second_h}_{layers}L"
+            total_layers = config[-1]
+            active_neurons = config[:-1][:total_layers]
+            if total_layers == 1:
+                model_id = f"{active_neurons[0]}"
+            else:
+                model_id = "x".join(map(str, active_neurons))
             
             try:
                 result = future.result()
                 completed_count += 1
                 remaining = total_count - completed_count
+                active_threads = sum(1 for f in future_to_config if not f.done())
+                elapsed = time.time() - start_time
+                
+                # Resource monitoring
+                memory_mb = psutil.virtual_memory().used / 1024 / 1024
+                cpu_percent = psutil.cpu_percent()
+                
                 print(f"[PROGRESS] Completed {completed_count}/{total_count} - Model {model_id} finished")
+                print(f"[THREADS] Active: {active_threads}, Remaining: {remaining}, Elapsed: {elapsed:.1f}s")
+                print(f"[RESOURCES] Memory: {memory_mb:.0f}MB, CPU: {cpu_percent:.1f}%")
                 if remaining > 0:
                     print(f"[POOL] {remaining} tasks remaining in queue, next task starting automatically")
                 

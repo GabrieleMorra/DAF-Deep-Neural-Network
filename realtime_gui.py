@@ -28,16 +28,19 @@ class RealTimeTableGUI:
         # Load dataset information dynamically
         self.dataset_info = self._load_dataset_info(config_path)
         
-        # Create architecture labels for each configuration
+        # Create architecture labels for each configuration (generic approach)
         self.model_labels = {}
-        for first_hidden_neurons, second_hidden_neurons, total_layers in param_combinations:
-            model_id = f"{first_hidden_neurons}_{second_hidden_neurons}_{total_layers}L"
-            hidden_layers = total_layers - 1
+        for layer_config in param_combinations:
+            total_layers = layer_config[-1]
+            active_neurons = layer_config[:-1][:total_layers]
             
-            if hidden_layers == 1:
-                label_text = f"{first_hidden_neurons}"
+            # Generate model_id consistent with DNN_architecture_sweep.py
+            if total_layers == 1:
+                model_id = f"{active_neurons[0]}"
+                label_text = f"{active_neurons[0]}"
             else:
-                label_text = f"{first_hidden_neurons}x{second_hidden_neurons}"
+                model_id = "x".join(map(str, active_neurons))
+                label_text = "x".join(map(str, active_neurons))
                 
             self.model_labels[model_id] = label_text
         
@@ -204,7 +207,8 @@ class RealTimeTableGUI:
                  background=[('selected', self.colors['secondary'])],
                  foreground=[('selected', 'white')])
         
-        # Create compact columns - only current R² values, summary info, and optimal stop
+        # Create compact columns - ID first, then architecture, current R² values, summary info, and optimal stop
+        id_columns = ['ID']
         base_columns = ['Architecture', 'Epoch']
         output_columns = [f'{var}_R2' for var in self.dataset_info['output_variables']]
         
@@ -215,40 +219,47 @@ class RealTimeTableGUI:
             summary_columns = ['Max_R2', 'Best_Epoch', 'Optimal_Stop']
             
         status_columns = ['Status']
-        columns = tuple(base_columns + output_columns + summary_columns + status_columns)
+        columns = tuple(id_columns + base_columns + output_columns + summary_columns + status_columns)
         
         self.tree = ttk.Treeview(table_container, columns=columns, show='headings', 
                                 height=18, style="Modern.Treeview")
         
-        # Define compact professional headings
-        self.tree.heading('#1', text='Architecture')
-        self.tree.heading('#2', text='Epoch')
+        # Define compact professional headings with sorting
+        self.sort_orders = {}  # Track sort order for each column
+        self.current_sort_column = None  # Track currently active sort column
+        self.current_sort_ascending = True  # Track current sort direction
         
-        col_num = 3
+        self.tree.heading('#1', text='ID', command=lambda: self.sort_column('ID'))
+        self.tree.heading('#2', text='Architecture', command=lambda: self.sort_column('Architecture'))
+        self.tree.heading('#3', text='Epoch', command=lambda: self.sort_column('Epoch'))
+        
+        col_num = 4
         # Current R² for each output variable
         for i, output_var in enumerate(self.dataset_info['output_variables']):
-            self.tree.heading(f'#{col_num}', text=f'{output_var} R²')
+            col_name = f'{output_var}_R2'
+            self.tree.heading(f'#{col_num}', text=f'{output_var} R²', command=lambda c=col_name: self.sort_column(c))
             col_num += 1
         
         # Summary columns
         if len(self.dataset_info['output_variables']) > 1:
-            self.tree.heading(f'#{col_num}', text='Avg Max R²')
+            self.tree.heading(f'#{col_num}', text='Avg Max R²', command=lambda: self.sort_column('Avg_Max_R2'))
         else:
-            self.tree.heading(f'#{col_num}', text='Max R²')
+            self.tree.heading(f'#{col_num}', text='Max R²', command=lambda: self.sort_column('Max_R2'))
         col_num += 1
-        self.tree.heading(f'#{col_num}', text='Best Epoch')
+        self.tree.heading(f'#{col_num}', text='Best Epoch', command=lambda: self.sort_column('Best_Epoch'))
         col_num += 1
-        self.tree.heading(f'#{col_num}', text='Stop Epoch')
+        self.tree.heading(f'#{col_num}', text='Stop Epoch', command=lambda: self.sort_column('Optimal_Stop'))
         col_num += 1
         
         # Status column
-        self.tree.heading(f'#{col_num}', text='Status')
+        self.tree.heading(f'#{col_num}', text='Status', command=lambda: self.sort_column('Status'))
         
         # Configure compact column widths
-        self.tree.column('#1', width=100, anchor='center')  # Architecture
-        self.tree.column('#2', width=80, anchor='center')   # Epoch
+        self.tree.column('#1', width=50, anchor='center')   # ID
+        self.tree.column('#2', width=100, anchor='center')  # Architecture
+        self.tree.column('#3', width=80, anchor='center')   # Epoch
         
-        col_num = 3
+        col_num = 4
         # Configure current R² columns
         for i in range(len(self.dataset_info['output_variables'])):
             self.tree.column(f'#{col_num}', width=80, anchor='center')
@@ -285,12 +296,21 @@ class RealTimeTableGUI:
         
         # Initialize table rows with dynamic values
         self.table_items = {}
-        for first_hidden_neurons, second_hidden_neurons, total_layers in self.param_combinations:
-            model_id = f"{first_hidden_neurons}_{second_hidden_neurons}_{total_layers}L"
+        for idx, layer_config in enumerate(self.param_combinations):
+            total_layers = layer_config[-1]
+            active_neurons = layer_config[:-1][:total_layers]
+            
+            if total_layers == 1:
+                model_id = f"{active_neurons[0]}"
+            else:
+                model_id = "x".join(map(str, active_neurons))
             arch_label = self.model_labels[model_id]
             
-            # Create initial values: Architecture, Epoch, Current R² scores, Summary columns, Status
-            initial_values = [arch_label, '0']
+            # Store ID in model data for efficiency
+            self.model_data[model_id]['id'] = idx
+            
+            # Create initial values: ID, Architecture, Epoch, Current R² scores, Summary columns, Status
+            initial_values = [str(idx), arch_label, '0']
             initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))  # Current R² scores
             initial_values.extend(['0.00', '0', '0'])  # Max R² (or Avg Max R²), Best Epoch, Stop Epoch
             initial_values.append('Waiting')  # Status
@@ -404,8 +424,9 @@ class RealTimeTableGUI:
             status = 'Waiting'
             tag = 'waiting'
         
-        # Build values: Architecture, Epoch, Current R² scores, Summary stats, Status
-        values = [arch_label, f"{data['epoch']}"]
+        # Build values: ID, Architecture, Epoch, Current R² scores, Summary stats, Status
+        model_index = data.get('id', '?')
+        values = [str(model_index), arch_label, f"{data['epoch']}"]
         
         # Add current R² scores for each output variable
         for i, r2_score in enumerate(data['r2_scores']):
@@ -428,6 +449,10 @@ class RealTimeTableGUI:
         self.tree.item(self.table_items[model_id], 
                       values=tuple(values),
                       tags=(tag,))
+        
+        # If there's an active sort, re-apply it to keep the table sorted
+        if self.current_sort_column is not None:
+            self._perform_sort(self.current_sort_column, self.current_sort_ascending)
         
         # Update status
         self.update_status()
@@ -505,6 +530,91 @@ class RealTimeTableGUI:
     def _safe_close(self):
         """Internal method to safely close GUI"""
         self.on_closing()
+    
+    def sort_column(self, col_name):
+        """Sort table by column with alternating ascending/descending order"""
+        # Toggle sort order for this column
+        if col_name not in self.sort_orders:
+            self.sort_orders[col_name] = True  # True = ascending, False = descending
+        else:
+            self.sort_orders[col_name] = not self.sort_orders[col_name]
+        
+        ascending = self.sort_orders[col_name]
+        
+        # Update current sort tracking
+        self.current_sort_column = col_name
+        self.current_sort_ascending = ascending
+        
+        # Perform the actual sorting
+        self._perform_sort(col_name, ascending)
+    
+    def _perform_sort(self, col_name, ascending):
+        """Internal method to perform the actual sorting"""
+        # Get all items with their values
+        items = []
+        for item in self.tree.get_children():
+            values = self.tree.item(item, 'values')
+            items.append((item, values))
+        
+        # Find column index
+        columns = ['ID', 'Architecture', 'Epoch'] + [f'{var}_R2' for var in self.dataset_info['output_variables']]
+        if len(self.dataset_info['output_variables']) > 1:
+            columns.extend(['Avg_Max_R2', 'Best_Epoch', 'Optimal_Stop'])
+        else:
+            columns.extend(['Max_R2', 'Best_Epoch', 'Optimal_Stop'])
+        columns.append('Status')
+        
+        try:
+            col_index = columns.index(col_name)
+        except ValueError:
+            return  # Column not found
+        
+        # Sort based on column type
+        def sort_key(item):
+            value = item[1][col_index]
+            
+            # Handle different data types
+            if col_name == 'ID':
+                return int(value) if value.isdigit() else 0
+            elif col_name in ['Epoch', 'Best_Epoch', 'Optimal_Stop']:
+                return int(value) if value.isdigit() else 0
+            elif '_R2' in col_name or 'Max_R2' in col_name:
+                try:
+                    return float(value)
+                except ValueError:
+                    return 0.0
+            elif col_name == 'Architecture':
+                # Sort architectures logically: single numbers first, then combinations
+                if 'x' in value:
+                    # For combinations like "5x10", sort by first number then second
+                    parts = value.split('x')
+                    return (1000 + int(parts[0]), int(parts[1]))  # Offset to put after singles
+                else:
+                    # For single numbers like "5", sort by number
+                    return (int(value), 0)
+            else:
+                return str(value).lower()
+        
+        # Sort items
+        items.sort(key=sort_key, reverse=not ascending)
+        
+        # Clear tree and re-insert sorted items
+        for item, _ in items:
+            self.tree.move(item, '', 'end')
+        
+        # Update column heading to show sort direction
+        direction = " ↑" if ascending else " ↓"
+        current_text = self.tree.heading(f'#{col_index + 1}')['text']
+        # Remove any existing direction indicators
+        clean_text = current_text.replace(" ↑", "").replace(" ↓", "")
+        self.tree.heading(f'#{col_index + 1}', text=clean_text + direction)
+        
+        # Clear direction indicators from other columns
+        for i, col in enumerate(columns):
+            if col != col_name:
+                heading_text = self.tree.heading(f'#{i + 1}')['text']
+                clean_text = heading_text.replace(" ↑", "").replace(" ↓", "")
+                self.tree.heading(f'#{i + 1}', text=clean_text)
 
 # Test the GUI
 if __name__ == "__main__":
@@ -517,7 +627,10 @@ if __name__ == "__main__":
     def add_test_data():
         for i in range(20):
             for j, (neurons_input, neurons_hidden, num_layers) in enumerate(test_configs):
-                model_id = f"{neurons_input}_{neurons_hidden}_{num_layers}L"
+                if num_layers == 1:
+                    model_id = f"{neurons_input}"
+                else:
+                    model_id = f"{neurons_input}x{neurons_hidden}"
                 epoch = i * 250
                 # Test single output (current case)
                 r2_score = 30 + 40 * math.sin(i * 0.3 + j) + 20
@@ -525,11 +638,19 @@ if __name__ == "__main__":
                 time.sleep(0.2)
         
         # Mark some as completed and one as error
-        gui.mark_completed(f"{test_configs[0][0]}_{test_configs[0][1]}_{test_configs[0][2]}L")
+        config0 = test_configs[0]
+        config1 = test_configs[1] 
+        config2 = test_configs[2]
+        
+        model_id0 = f"{config0[0]}" if config0[2] == 1 else f"{config0[0]}x{config0[1]}"
+        model_id1 = f"{config1[0]}" if config1[2] == 1 else f"{config1[0]}x{config1[1]}" 
+        model_id2 = f"{config2[0]}" if config2[2] == 1 else f"{config2[0]}x{config2[1]}"
+        
+        gui.mark_completed(model_id0)
         time.sleep(2)
-        gui.mark_error(f"{test_configs[1][0]}_{test_configs[1][1]}_{test_configs[1][2]}L")
+        gui.mark_error(model_id1)
         time.sleep(1)
-        gui.mark_completed(f"{test_configs[2][0]}_{test_configs[2][1]}_{test_configs[2][2]}L")
+        gui.mark_completed(model_id2)
     
     # Start test data in separate thread
     test_thread = threading.Thread(target=add_test_data)
