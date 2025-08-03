@@ -18,7 +18,7 @@ def train_fidelity_r2(y_true, y_pred):
     return max(0, r2 * 100)  # Impedisce valori negativi
 
 
-def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None):
+def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=None, pause_check_func=None):
 
     X                   = database['X_train']
     Y                   = database['Y_train']
@@ -49,7 +49,22 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None):
     # Voglio contare il tempo di esecuzione del training
     start_time = time.time()
 
-    for i in range(epochs + 1): 
+    for i in range(epochs + 1):
+        # Check for pause/deletion every few epochs for responsiveness
+        if pause_check_func and i % 10 == 0:  # Check every 10 epochs
+            check_result = pause_check_func()
+            if check_result is True:  # Deleted
+                print(f"[TERMINATED] {model_id} deleted at epoch {i}")
+                return None
+            elif check_result is False:  # Paused
+                # Wait for resume (no spam messages)
+                while pause_check_func() is False:
+                    time.sleep(1)  # Check every second
+                # Check again if deleted after resume
+                if pause_check_func() is True:
+                    print(f"[TERMINATED] {model_id} deleted during pause at epoch {i}")
+                    return None
+        
         Y_hat, memory                                     = full_forward_propagation(X, params_values, network_layers)
         mean_loss                                         = get_mean_loss(Y_hat, Y, nn)
         grads_values                                      = full_backward_propagation(Y_hat, Y, memory, params_values, nn, network_layers)
@@ -63,7 +78,8 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None):
         
         # Send data for real-time plotting if available
         if data_queue is not None and model_id is not None and i % ShowEvery == 0:
-            data_queue.put((model_id, i, r2_per_variable))
+            # Send comprehensive training data: model_id, epoch, r2_per_variable, training_fidelity, validation_fidelity, mean_loss
+            data_queue.put((model_id, i, r2_per_variable, training_fidelity, validation_fidelity, mean_loss))
         
     # Calcolo il tempo di esecuzione del training
     end_time = time.time()

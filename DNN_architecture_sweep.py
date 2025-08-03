@@ -17,7 +17,7 @@ import pickle
 import psutil
 import gc
 
-def run_model_threaded(layer_neurons, database, sweep_config, results_queue, data_queue, onnx_dir="trained_onnx_models"):
+def run_model_threaded(layer_neurons, database, sweep_config, results_queue, data_queue, gui_ref=None, onnx_dir="trained_onnx_models"):
     # layer_neurons is a list: [n1, n2, n3, ..., 0, 0, total_layers]
     # Extract total_layers (last element) and active neuron counts
     total_layers = layer_neurons[-1]
@@ -79,20 +79,74 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
                 layers_info.append(f"{key}: {value['neurons']} neurons")
             else:
                 layers_info.append(f"{key}: output layer")
-    print(f"[ARCH DEBUG] {model_id} → {' | '.join(layers_info)}")
+    print(f"[ARCH DEBUG] {model_id} -> {' | '.join(layers_info)}")
     
     # Also debug the input parameters
-    print(f"[PARAMS DEBUG] {model_id} → neurons: {active_neurons}, total_layers: {total_layers}")
+    print(f"[PARAMS DEBUG] {model_id} -> neurons: {active_neurons}, total_layers: {total_layers}")
+    
+    # Check for pause before starting training (global or individual)
+    pause_message_shown = False
+    
+    def check_pause_and_deletion():
+        nonlocal pause_message_shown
+        if gui_ref:
+            # Check if model was deleted
+            if gui_ref.is_model_deleted(model_id):
+                print(f"[DELETED] {model_id} was deleted, terminating training")
+                return True  # Should terminate
+            
+            # Check for pause (global or individual)
+            global_paused = gui_ref.is_paused
+            individual_paused = gui_ref.is_model_paused(model_id)
+            
+            if global_paused or individual_paused:
+                # Show message only once and update GUI status
+                if not pause_message_shown:
+                    if global_paused:
+                        print(f"[GLOBAL PAUSE] {model_id} paused (global)")
+                    elif individual_paused:
+                        print(f"[MODEL PAUSE] {model_id} paused (individual)")
+                    
+                    # Update GUI status to show paused
+                    data_queue.put((model_id, 'PAUSED'))
+                    pause_message_shown = True
+                
+                return False  # Should wait but not terminate
+            else:
+                # If no longer paused, reset message flag and update status
+                if pause_message_shown:
+                    print(f"[RESUME] {model_id} resumed")
+                    # Update GUI status back to training
+                    data_queue.put((model_id, 'TRAINING'))
+                    pause_message_shown = False
+        return None  # Continue normally
+    
+    # Initial pause check (no debug spam)
+    while True:
+        check_result = check_pause_and_deletion()
+        if check_result is True:  # Deleted
+            return False
+        elif check_result is False:  # Paused
+            time.sleep(1)  # Check every second
+            continue
+        else:  # Continue
+            break
     
     try:
-        # Chiama direttamente TrainNeuralNetwork invece di subprocess
-        result = TrainNeuralNetwork(nnModel, database, model_id, data_queue)
+        # Chiama direttamente TrainNeuralNetwork con controllo pause
+        result = TrainNeuralNetwork(nnModel, database, model_id, data_queue, gui_ref, check_pause_and_deletion)
         
-        # Send completion signal to GUI
-        data_queue.put((model_id, 'COMPLETED'))
-        
-        results_queue.put((model_id, True, result))
-        print(f"[COMPLETED] Model {model_id} - Validation R²: {result['validation_fidelity']:.2f}%")
+        # Only send completion if training actually completed (result is not None)
+        if result is not None:
+            # Send completion signal to GUI with final results
+            data_queue.put((model_id, 'COMPLETED', result))
+            
+            results_queue.put((model_id, True, result))
+            print(f"[COMPLETED] Model {model_id} - Validation R²: {result['validation_fidelity']:.2f}%")
+        else:
+            # Training was terminated/deleted - just mark as failed
+            print(f"[TERMINATED] Model {model_id} training was terminated")
+            results_queue.put((model_id, False, None))
         
         # Explicit cleanup to free memory
         del nnModel, config
@@ -142,7 +196,7 @@ class RealTimeGUIWrapper:
             self.gui.show()
             
         self.gui_thread = threading.Thread(target=run_gui)
-        self.gui_thread.daemon = True
+        self.gui_thread.daemon = False  # Don't make it a daemon so it keeps program alive
         self.gui_thread.start()
         
         # Give GUI time to initialize
@@ -150,17 +204,22 @@ class RealTimeGUIWrapper:
         
     def collect_training_data(self, data_queue):
         """Collect data from training threads and forward to GUI"""
+        from queue import Empty
         while True:
             try:
                 data = data_queue.get(timeout=1)
                 if data is None:
                     self.data_queue.put(None)  # Signal GUI to stop
-                    break
+                    break 
                     
                 # Forward data to GUI
                 self.data_queue.put(data)
                 
-            except:
+            except Empty:
+                # Empty exceptions are normal when no data is available
+                continue
+            except Exception as e:
+                print(f"Error in data collection: {e}")
                 continue
                 
     def check_and_update_plot(self):
@@ -177,6 +236,11 @@ class RealTimeGUIWrapper:
     def set_executor(self, executor):
         """Set reference to ThreadPoolExecutor for cleanup"""
         self.executor = executor
+    
+    def wait_for_gui_close(self):
+        """Wait for the GUI thread to finish (when user closes the window)"""
+        if self.gui_thread and self.gui_thread.is_alive():
+            self.gui_thread.join()  # Wait for GUI thread to finish
                 
     def log_final_results(self, results):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -316,11 +380,26 @@ def run_sweep_threading():
     # Get max epochs from configuration
     max_epochs = sweep_config["NeuralNetworkModel"]["epochs"]
     
-    # Create ONNX models directory
+    # Create ONNX models directory and clean previous models
     onnx_dir = "trained_onnx_models"
     if not os.path.exists(onnx_dir):
         os.makedirs(onnx_dir)
         print(f"[INIT] Created directory for ONNX models: {onnx_dir}")
+    else:
+        # Clean existing ONNX models from previous sessions
+        import glob
+        existing_models = glob.glob(os.path.join(onnx_dir, "*.onnx"))
+        if existing_models:
+            print(f"[CLEANUP] Removing {len(existing_models)} existing ONNX models from previous sessions...")
+            for model_file in existing_models:
+                try:
+                    os.remove(model_file)
+                    print(f"[CLEANUP] Removed: {os.path.basename(model_file)}")
+                except Exception as e:
+                    print(f"[WARNING] Could not remove {os.path.basename(model_file)}: {e}")
+            print(f"[CLEANUP] Directory cleaned for new training session")
+        else:
+            print(f"[INIT] Using existing directory: {onnx_dir} (no previous models found)")
     
     # Initialize GUI-based real-time plotter
     print("[GUI] Starting real-time GUI monitor...")
@@ -349,25 +428,51 @@ def run_sweep_threading():
         plotter.set_executor(executor)
         # Submit all tasks to the thread pool
         future_to_config = {}
+        submitted_configs = list(param_combinations)  # Keep track of submitted configs
         
         print(f"[POOL] Submitting {len(param_combinations)} training tasks to thread pool...")
         
-        for i, layer_config in enumerate(param_combinations):
+        # Submit initial configurations with priority support
+        submitted_configs = list(param_combinations)
+        
+        def submit_configuration(layer_config):
+            """Submit a configuration and track it"""
+            # Ensure GUI is properly initialized
+            if not plotter.gui:
+                print("[ERROR] GUI not initialized when submitting configuration!")
+                return None, None
+            
             future = executor.submit(
                 run_model_threaded, 
                 layer_config, 
-                database, sweep_config, results_queue, data_queue, onnx_dir
+                database, sweep_config, results_queue, data_queue, plotter.gui, onnx_dir
             )
             future_to_config[future] = layer_config
             
+            # Track future for this model
+            total_layers = layer_config[-1]
+            active_neurons = layer_config[:-1][:total_layers]
+            if total_layers == 1:
+                model_id = f"{active_neurons[0]}"
+            else:
+                model_id = "x".join(map(str, active_neurons))
+            plotter.gui.model_futures[model_id] = future
+            
+            return future, model_id
+        
+        # Ensure GUI is ready before submitting
+        while not plotter.gui:
+            time.sleep(0.5)
+        
+        # Submit initial configurations
+        for i, layer_config in enumerate(param_combinations):
+            result = submit_configuration(layer_config)
+            if result[0] is None:  # Failed to submit
+                continue
+            future, model_id = result
+            
             # Log when first batch starts
             if i < max_threads:
-                total_layers = layer_config[-1]
-                active_neurons = layer_config[:-1][:total_layers]
-                if total_layers == 1:
-                    model_id = f"{active_neurons[0]}"
-                else:
-                    model_id = "x".join(map(str, active_neurons))
                 print(f"[START] Model {model_id} starting in thread pool")
         
         # Process completed tasks as they finish
@@ -377,42 +482,134 @@ def run_sweep_threading():
         print(f"[POOL] All {total_count} training tasks submitted to thread pool")
         print(f"[POOL] First {min(max_threads, total_count)} tasks are now running")
         
-        for future in as_completed(future_to_config):
-            config = future_to_config[future]
-            total_layers = config[-1]
-            active_neurons = config[:-1][:total_layers]
-            if total_layers == 1:
-                model_id = f"{active_neurons[0]}"
-            else:
-                model_id = "x".join(map(str, active_neurons))
+        # Dynamic loop that can handle new configurations - keeps running until GUI closes
+        loop_count = 0
+        sweep_completed = False
+        
+        while True:
+            # Check if GUI is still alive
+            if not plotter.gui_thread.is_alive():
+                print("[LOOP] GUI closed, terminating sweep loop")
+                break
             
-            try:
-                result = future.result()
-                completed_count += 1
-                remaining = total_count - completed_count
-                active_threads = sum(1 for f in future_to_config if not f.done())
-                elapsed = time.time() - start_time
-                
-                # Resource monitoring
-                memory_mb = psutil.virtual_memory().used / 1024 / 1024
-                cpu_percent = psutil.cpu_percent()
-                
-                print(f"[PROGRESS] Completed {completed_count}/{total_count} - Model {model_id} finished")
-                print(f"[THREADS] Active: {active_threads}, Remaining: {remaining}, Elapsed: {elapsed:.1f}s")
-                print(f"[RESOURCES] Memory: {memory_mb:.0f}MB, CPU: {cpu_percent:.1f}%")
-                if remaining > 0:
-                    print(f"[POOL] {remaining} tasks remaining in queue, next task starting automatically")
-                
-            except Exception as e:
-                completed_count += 1
-                remaining = total_count - completed_count
-                print(f"[ERROR] Model {model_id} failed with exception: {str(e)}")
-                if remaining > 0:
-                    print(f"[POOL] {remaining} tasks remaining in queue, next task starting automatically")
+            # Check if we have active work or pending configurations
+            has_active_work = bool(future_to_config)
+            has_pending_configs = bool(plotter.gui.pending_configurations)
             
-            # Update plot periodically (every 5 completions or at the end)
-            if completed_count % 5 == 0 or completed_count == total_count:
-                plotter.check_and_update_plot()
+            if not has_active_work and not has_pending_configs:
+                if not sweep_completed:
+                    print(f"[SWEEP] Initial sweep completed - {completed_count} models finished")
+                    print(f"[SWEEP] Loop continues running for new configurations...")
+                    sweep_completed = True
+                
+                # No work but keep loop alive for new configurations
+                time.sleep(1)  # Check every second when idle
+                continue
+            loop_count += 1
+            # Submit any new configurations from GUI
+            
+            # Submit new configurations from GUI
+            if plotter.gui.pending_configurations:
+                # Check available slots
+                active_futures = [f for f in future_to_config if not f.done()]
+                available_slots = max_threads - len(active_futures)
+                
+                if available_slots > 0:
+                    new_configs = plotter.gui.pending_configurations.copy()
+                    plotter.gui.pending_configurations.clear()
+                    print(f"[POOL] Processing {len(new_configs)} new configurations, {available_slots} slots available")
+                    
+                    configs_submitted = 0
+                    for config in new_configs:
+                        if configs_submitted >= available_slots:
+                            # Put back remaining configs
+                            plotter.gui.pending_configurations.extend(new_configs[configs_submitted:])
+                            print(f"[POOL] No more slots, {len(new_configs) - configs_submitted} configs deferred")
+                            break
+                        
+                        # Skip deleted configurations
+                        total_layers = config[-1]
+                        active_neurons = config[:-1][:total_layers]
+                        if total_layers == 1:
+                            check_model_id = f"{active_neurons[0]}"
+                        else:
+                            check_model_id = "x".join(map(str, active_neurons))
+                        
+                        if plotter.gui.is_model_deleted(check_model_id):
+                            print(f"[SKIP] {check_model_id} was deleted, skipping")
+                            continue
+                        
+                        result = submit_configuration(config)
+                        if result[0] is None:  # Failed to submit
+                            print(f"[ERROR] Failed to submit {check_model_id}")
+                            continue
+                        
+                        future, model_id = result
+                        submitted_configs.append(config)
+                        total_count += 1
+                        configs_submitted += 1
+                        print(f"[NEW CONFIG] Submitted {model_id} to thread pool ({available_slots - configs_submitted} slots remaining)")
+                else:
+                    if loop_count % 50 == 0:  # Log only occasionally
+                        print(f"[POOL] All {max_threads} threads busy, {len(plotter.gui.pending_configurations)} configs waiting")
+            
+            # Process completed futures
+            completed_futures = [f for f in future_to_config if f.done()]
+            for future in completed_futures:
+                config = future_to_config[future]
+                total_layers = config[-1]
+                active_neurons = config[:-1][:total_layers]
+                if total_layers == 1:
+                    model_id = f"{active_neurons[0]}"
+                else:
+                    model_id = "x".join(map(str, active_neurons))
+                
+                try:
+                    result = future.result()
+                    completed_count += 1
+                    remaining = total_count - completed_count
+                    active_threads = len(future_to_config)
+                    elapsed = time.time() - start_time
+                    
+                    # Resource monitoring
+                    memory_mb = psutil.virtual_memory().used / 1024 / 1024
+                    cpu_percent = psutil.cpu_percent()
+                    
+                    print(f"[PROGRESS] Completed {completed_count}/{total_count} - Model {model_id} finished")
+                    print(f"[THREADS] Active: {active_threads}, Remaining: {remaining}, Elapsed: {elapsed:.1f}s")
+                    print(f"[RESOURCES] Memory: {memory_mb:.0f}MB, CPU: {cpu_percent:.1f}%")
+                    if remaining > 0 or plotter.gui.pending_configurations:
+                        print(f"[POOL] {remaining} tasks remaining, checking for new configurations...")
+                    
+                except Exception as e:
+                    completed_count += 1
+                    remaining = total_count - completed_count
+                    print(f"[ERROR] Model {model_id} failed with exception: {str(e)}")
+                
+                # Remove from tracking
+                del future_to_config[future]
+                
+                # Remove from model futures tracking
+                if model_id in plotter.gui.model_futures:
+                    del plotter.gui.model_futures[model_id]
+                
+                # Update plot periodically (every 5 completions)
+                if completed_count % 5 == 0:
+                    plotter.check_and_update_plot()
+            
+            # Reset sweep_completed flag if we have new work
+            if (has_active_work or has_pending_configs) and sweep_completed:
+                sweep_completed = False
+                print(f"[SWEEP] New work detected - sweep resuming")
+            
+            # Check for force flag or small delay to prevent busy waiting
+            if not completed_futures:
+                if plotter.gui.force_check_flag:
+                    plotter.gui.force_check_flag = False
+                elif plotter.gui.pending_configurations:
+                    time.sleep(0.1)  # Check very quickly for new configs
+                else:
+                    time.sleep(0.5)  # Normal delay when no pending configs
         
         print(f"[POOL] All {total_count} training tasks completed")
     
@@ -450,7 +647,7 @@ def run_sweep_threading():
     if failed_configs:
         print(f"\n[FAILURES] Failed model configurations:")
         for config in failed_configs:
-            print(f"  → {config}")
+            print(f"  -> {config}")
     
     # Show best performing models
     successful_results = [(model_id, result) for model_id, success, result in results if success and result]
@@ -470,6 +667,15 @@ def run_sweep_threading():
     
     # Keep plot open for analysis - don't auto-close
     print("[INFO] GUI remains open for analysis. Close manually when done.")
+    
+    # Wait for user to close the GUI
+    try:
+        plotter.wait_for_gui_close()
+    except KeyboardInterrupt:
+        print("\n[INFO] Ctrl+C pressed. Closing GUI...")
+        plotter.close_plot()
+    
+    print("[INFO] GUI closed. Program terminating.")
 
 def convert_json_format(new_nn):
     old_nn = {}
@@ -499,6 +705,6 @@ def convert_json_format(new_nn):
     return old_nn
 
 if __name__ == "__main__":
-    print("Neural Network Architecture Sweep - Real-Time Performance Monitor")
+    print("Multi-Thread Neural Network Architecture Sweep - Real-Time Performance Monitor")
     print("Initializing comprehensive model evaluation...")
     run_sweep_threading()

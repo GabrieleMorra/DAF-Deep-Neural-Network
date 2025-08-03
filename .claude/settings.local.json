@@ -3,7 +3,8 @@
   "permissions": {
     "allow": [
       "Bash(python:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }
