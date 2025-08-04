@@ -105,16 +105,17 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
         'headers': headers
     }
 
-    # Save the data in a pickle file
-    # with open(nn["NeuralNetworkModel"]["OutputFileName"]+'.pkl', 'wb') as f:
-    #     pickle.dump(data, f)
-
-    # Save the data in an onnx file in dedicated directory
-    single_onnx_dir = "single_trained_onnx_models"
-    if not os.path.exists(single_onnx_dir):
-        os.makedirs(single_onnx_dir)
+    # Extract dataset name from InputFileName
+    input_filename = nn["NeuralNetworkModel"]["InputFileName"]
+    dataset_name = os.path.splitext(input_filename)[0]
+    output_filename = f"Trained_DNN_{dataset_name}"
     
-    output_path = os.path.join(single_onnx_dir, nn["NeuralNetworkModel"]["OutputFileName"]+'.onnx')
+    # Save the data in a pickle file for visualization and analysis
+    with open(f'{output_filename}.pkl', 'wb') as f:
+        pickle.dump(data, f)
+
+    # Save the data in an onnx file
+    output_path = f'{output_filename}.onnx'
     save_onnx(nn, database, params_values, network_layers, (1, len(inputEntryIndices)), output_path)
 
     # Final log message
@@ -160,5 +161,7 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
         'mean_loss': mean_loss,
         'elapsed_time': elapsed_time,
         'accuracy_per_variable': accuracy_per_variable,
-        'r2_per_variable': r2_per_variable
+        'r2_per_variable': r2_per_variable,
+        'params_values': params_values,
+        'loss_history': loss_history
     } 

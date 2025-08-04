@@ -4,6 +4,7 @@ from GetDatabase import get_database
 
 import json
 import pickle
+import os
 
 def convert_json_format(new_nn):
     old_nn = {}
@@ -42,19 +43,32 @@ nnModel = convert_json_format(read_json)
 
 Database = get_database(nnModel)
 
-TrainNeuralNetwork(nnModel, Database)
+result = None
 
-# with open(nnModel["NeuralNetworkModel"]["OutputFileName"]+'.pkl', 'rb') as f:
-#     storedData = pickle.load(f)
-# visualize_NN_results(
-#     storedData['X'], 
-#     storedData['Y'],
-#     storedData['params_values'], 
-#     storedData['nn'], 
-#     storedData['min_data'], 
-#     storedData['max_data'], 
-#     storedData['outputIndexEntry'],
-#     storedData['loss_history'],
-#     storedData['X_valid'],
-#     storedData['Y_valid'],
-#     )
+# Extract dataset name for automatic naming
+input_filename = nnModel["NeuralNetworkModel"]["InputFileName"]
+dataset_name = os.path.splitext(input_filename)[0]
+output_file = f"Trained_DNN_{dataset_name}"
+
+# Train the neural network and get results
+result = TrainNeuralNetwork(nnModel, Database)
+
+
+if result is not None:
+    print("\nGenerating comprehensive visualizations...")
+    
+    # Call visualization with PKL file
+    from Visualization import visualize_NN_results
+    visualize_NN_results()
+else:
+    try:
+        with open(f"{output_file}.pkl", "rb") as f:
+            result = pickle.load(f)
+            print(f"✅ Successfully loaded trained model from '{output_file}.pkl'")
+
+            from Visualization import visualize_NN_results
+            visualize_NN_results()
+    except FileNotFoundError:
+        print(f"❌ '{output_file}.pkl' not found. Please ensure the model is trained and saved.")
+    except Exception as e:
+        print(f"❌ Error loading '{output_file}.pkl': {e}")
