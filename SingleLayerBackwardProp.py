@@ -1,11 +1,14 @@
 import numpy as np
 from ActivationFunctions import *
 
+# Create singleton activation function instance
+_activation_functions = ActivationFunctions()
 
 def GD_backward_propagation(dLdA_curr, Z_curr, A_prev, activation):
 
     m = A_prev.shape[0]
-    af = ActivationFunctions()
+    # Use singleton instance instead of creating new object
+    af = _activation_functions
     if activation == "relu":
         dLdZ_curr = af.Derivative_ReLU(dLdA_curr, Z_curr)
     elif activation == "sigmoid":

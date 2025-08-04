@@ -14,14 +14,21 @@ def full_backward_propagation(Y_hat, Y, memory, params_value, nn, network_layers
         layer_idx_curr     = layer_idx_prev + 1
         activationFunction = dic["activation"]
 
-        A_prev = memory["A" + str(layer_idx_prev)]
-        Z_curr = memory["Z" + str(layer_idx_curr)]
-        W_curr = params_value["W" + str(layer_idx_curr)]
+        # Pre-generate string keys to avoid repeated concatenation
+        A_key = f"A{layer_idx_prev}"
+        Z_key = f"Z{layer_idx_curr}"
+        W_key = f"W{layer_idx_curr}"
+        dW_key = f"dW{layer_idx_curr}"
+        db_key = f"db{layer_idx_curr}"
+
+        A_prev = memory[A_key]
+        Z_curr = memory[Z_key]
+        W_curr = params_value[W_key]
 
         dLdZ_curr, dW_curr, db_curr = slbp.GD_backward_propagation(dLdA_curr, Z_curr, A_prev, activationFunction)
 
-        grads_values["dW" + str(layer_idx_curr)] = dW_curr.astype(float)
-        grads_values["db" + str(layer_idx_curr)] = db_curr.astype(float)
+        grads_values[dW_key] = dW_curr
+        grads_values[db_key] = db_curr
 
         dLdA_curr = np.dot(dLdZ_curr, W_curr.T)          
 

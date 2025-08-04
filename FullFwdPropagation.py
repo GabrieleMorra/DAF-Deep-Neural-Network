@@ -9,14 +9,20 @@ def full_forward_propagation(X, params_values, nn):
         layer_idx = idx + 1
         A_prev    = A_curr
 
+        # Pre-generate string keys to avoid repeated concatenation
+        W_key = f"W{layer_idx}"
+        b_key = f"b{layer_idx}"
+        A_key = f"A{idx}"
+        Z_key = f"Z{layer_idx}"
+
         activationFunction = nn[layer]["activation"]
-        W_curr             = params_values["W" + str(layer_idx)]
-        b_curr             = params_values["b" + str(layer_idx)]
+        W_curr             = params_values[W_key]
+        b_curr             = params_values[b_key]
         A_curr, Z_curr     = single_layer_forward_propagation(A_prev, W_curr, b_curr, activationFunction)
         
-        memory["A" + str(idx)]       = A_prev
-        memory["Z" + str(layer_idx)] = Z_curr
+        memory[A_key] = A_prev
+        memory[Z_key] = Z_curr
 
-    memory["A" + str(layer_idx)] = A_curr
+    memory[f"A{layer_idx}"] = A_curr
 
     return A_curr, memory

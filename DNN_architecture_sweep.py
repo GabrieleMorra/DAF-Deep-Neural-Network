@@ -16,8 +16,73 @@ from queue import Queue
 import pickle
 import psutil
 import gc
+import datetime
+import csv
+import subprocess
+import platform
+
+# Global shutdown flag for all training threads
+shutdown_requested = False
+shutdown_lock = threading.Lock()
+
+# Core assignment tracking
+core_assignment_counter = 0
+core_assignment_lock = threading.Lock()
+
+def set_cpu_affinity():
+    """Assign thread to a specific physical core for true parallelization"""
+    try:
+        # Skip for main thread
+        if threading.current_thread().name == 'MainThread':
+            return
+        
+        physical_cores = psutil.cpu_count(logical=False)
+        logical_cores = psutil.cpu_count(logical=True)
+        
+        if physical_cores <= 1:
+            print("[CPU] Only 1 physical core detected, CPU affinity not set")
+            return
+            
+        # Sequential assignment to physical cores
+        global core_assignment_counter
+        with core_assignment_lock:
+            core_id = core_assignment_counter % physical_cores
+            core_assignment_counter += 1
+        
+        # Calculate logical cores per physical core
+        if logical_cores > physical_cores:
+            logical_per_physical = logical_cores // physical_cores
+            # Assign thread to all logical cores of this physical core
+            cpu_list = [core_id * logical_per_physical + i for i in range(logical_per_physical)]
+        else:
+            # No hyperthreading, assign to single core
+            cpu_list = [core_id]
+        
+        # Set CPU affinity
+        current_process = psutil.Process()
+        current_process.cpu_affinity(cpu_list)
+        
+        thread_name = threading.current_thread().name
+        print(f"[CPU] Thread {thread_name} assigned to physical core {core_id} (logical cores: {cpu_list})")
+        
+        # Verify assignment worked
+        try:
+            actual_affinity = current_process.cpu_affinity()
+            if set(actual_affinity) == set(cpu_list):
+                print(f"[CPU] ✓ Thread {thread_name} successfully bound to cores {actual_affinity}")
+            else:
+                print(f"[CPU] ⚠ Thread {thread_name} assignment mismatch: expected {cpu_list}, got {actual_affinity}")
+        except:
+            pass
+        
+    except Exception as e:
+        print(f"[CPU] Failed to set CPU affinity: {e}")
+        pass  # Don't fail training if CPU affinity fails
 
 def run_model_threaded(layer_neurons, database, sweep_config, results_queue, data_queue, gui_ref=None, onnx_dir="trained_onnx_models"):
+    # Set CPU affinity for this thread to distribute across physical cores
+    set_cpu_affinity()
+    
     # layer_neurons is a list: [n1, n2, n3, ..., 0, 0, total_layers]
     # Extract total_layers (last element) and active neuron counts
     total_layers = layer_neurons[-1]
@@ -89,6 +154,14 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
     
     def check_pause_and_deletion():
         nonlocal pause_message_shown
+        
+        # Check for global shutdown first
+        global shutdown_requested
+        import __main__
+        if shutdown_requested or (hasattr(__main__, 'shutdown_requested') and __main__.shutdown_requested):
+            print(f"[SHUTDOWN] {model_id} terminating due to GUI closure")
+            return True  # Should terminate
+        
         if gui_ref:
             # Check if model was deleted
             if gui_ref.is_model_deleted(model_id):
@@ -142,7 +215,7 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
             data_queue.put((model_id, 'COMPLETED', result))
             
             results_queue.put((model_id, True, result))
-            print(f"[COMPLETED] Model {model_id} - Validation R²: {result['validation_fidelity']:.2f}%")
+            print(f"[COMPLETED] Model {model_id} - Validation Fidelity: {result['validation_fidelity']:.2f}%")
         else:
             # Training was terminated/deleted - just mark as failed
             print(f"[TERMINATED] Model {model_id} training was terminated")
@@ -206,6 +279,13 @@ class RealTimeGUIWrapper:
         """Collect data from training threads and forward to GUI"""
         from queue import Empty
         while True:
+            # Check for shutdown signal
+            global shutdown_requested
+            import __main__
+            if shutdown_requested or (hasattr(__main__, 'shutdown_requested') and __main__.shutdown_requested):
+                print("[DATA] Data collection terminating due to shutdown")
+                break
+                
             try:
                 data = data_queue.get(timeout=1)
                 if data is None:
@@ -219,7 +299,12 @@ class RealTimeGUIWrapper:
                 # Empty exceptions are normal when no data is available
                 continue
             except Exception as e:
-                print(f"Error in data collection: {e}")
+                # Check if it's a GUI-related error (main thread not in main loop)
+                if "main thread is not in main loop" in str(e):
+                    print("[DATA] GUI main loop ended, stopping data collection")
+                    break
+                else:
+                    print(f"Error in data collection: {e}")
                 continue
                 
     def check_and_update_plot(self):
@@ -240,7 +325,25 @@ class RealTimeGUIWrapper:
     def wait_for_gui_close(self):
         """Wait for the GUI thread to finish (when user closes the window)"""
         if self.gui_thread and self.gui_thread.is_alive():
-            self.gui_thread.join()  # Wait for GUI thread to finish
+            # Use very short timeout - GUI should close immediately
+            self.gui_thread.join(timeout=2.0)
+            if self.gui_thread.is_alive():
+                print("[WARNING] GUI thread didn't close cleanly, forcing termination")
+                # Set global shutdown flag first
+                global shutdown_requested
+                with shutdown_lock:
+                    shutdown_requested = True
+                
+                # Force terminate the entire process tree
+                try:
+                    if platform.system() == "Windows":
+                        pid = os.getpid()
+                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], 
+                                     timeout=2, capture_output=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+                os._exit(0)
                 
     def log_final_results(self, results):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -418,9 +521,26 @@ def run_sweep_threading():
     
     # Implement thread pool that starts new training as soon as a thread finishes
     
+    # Get CPU information
+    physical_cores = psutil.cpu_count(logical=False)
+    logical_cores = psutil.cpu_count(logical=True)
+    
+    print(f"[CPU] Detected {physical_cores} physical cores, {logical_cores} logical cores")
     print(f"[THREADS] Starting thread pool with {max_threads} concurrent workers")
+    print(f"[THREADS] Each thread will be assigned to a different physical core for true parallelization")
     print(f"[THREADS] This will keep {max_threads} training tasks running simultaneously")
     print(f"[THREADS] As each task completes, a new one will start immediately")
+    
+    # Warn if more threads than physical cores
+    if max_threads > physical_cores:
+        print(f"[WARNING] You have {max_threads} threads but only {physical_cores} physical cores!")
+        print(f"[WARNING] Some threads will share physical cores, reducing parallelization efficiency")
+        print(f"[SUGGESTION] Consider reducing max_threads to {physical_cores} for optimal performance")
+    
+    # Reset core assignment counter for this sweep
+    global core_assignment_counter
+    with core_assignment_lock:
+        core_assignment_counter = 0
     
     # Use ThreadPoolExecutor for better thread management
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
@@ -487,9 +607,24 @@ def run_sweep_threading():
         sweep_completed = False
         
         while True:
+            # Check for global shutdown signal (could be set by GUI)
+            global shutdown_requested
+            if shutdown_requested or (hasattr(__main__, 'shutdown_requested') and __main__.shutdown_requested):
+                print("[LOOP] Shutdown requested, terminating sweep loop")
+                # Ensure both flags are set
+                with shutdown_lock:
+                    shutdown_requested = True
+                    if hasattr(__main__, 'shutdown_requested'):
+                        __main__.shutdown_requested = True
+                break
+                
             # Check if GUI is still alive
             if not plotter.gui_thread.is_alive():
-                print("[LOOP] GUI closed, terminating sweep loop")
+                print("[LOOP] GUI closed, setting shutdown flag and terminating")
+                with shutdown_lock:
+                    shutdown_requested = True
+                    if hasattr(__main__, 'shutdown_requested'):
+                        __main__.shutdown_requested = True
                 break
             
             # Check if we have active work or pending configurations
@@ -550,8 +685,8 @@ def run_sweep_threading():
                         configs_submitted += 1
                         print(f"[NEW CONFIG] Submitted {model_id} to thread pool ({available_slots - configs_submitted} slots remaining)")
                 else:
-                    if loop_count % 50 == 0:  # Log only occasionally
-                        print(f"[POOL] All {max_threads} threads busy, {len(plotter.gui.pending_configurations)} configs waiting")
+                    # All threads busy - no need to spam console with this info
+                    pass
             
             # Process completed futures
             completed_futures = [f for f in future_to_config if f.done()]
@@ -652,7 +787,7 @@ def run_sweep_threading():
     # Show best performing models
     successful_results = [(model_id, result) for model_id, success, result in results if success and result]
     if successful_results:
-        print(f"\n[RANKINGS] Top performing models (by validation R²):")
+        print(f"\n[RANKINGS] Top performing models (by validation Fidelity):")
         successful_results.sort(key=lambda x: x[1]['validation_fidelity'], reverse=True)
         
         print(f"\n{'Rank':<6}{'Configuration':<15}{'Val R²':<10}{'Train R²':<10}{'Loss':<12}{'Time':<10}")
@@ -705,6 +840,11 @@ def convert_json_format(new_nn):
     return old_nn
 
 if __name__ == "__main__":
+    # Make shutdown flag accessible to GUI
+    import __main__
+    __main__.shutdown_requested = shutdown_requested
+    __main__.shutdown_lock = shutdown_lock
+    
     print("Multi-Thread Neural Network Architecture Sweep - Real-Time Performance Monitor")
     print("Initializing comprehensive model evaluation...")
     run_sweep_threading()

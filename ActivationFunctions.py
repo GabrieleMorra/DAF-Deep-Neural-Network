@@ -48,32 +48,42 @@ class ActivationFunctions(object):
         """ 
         Compute the derivative of the Sigmoid activation function.  
         """
-        sig = 1 / (1 + np.exp(-x))
+        exp_neg_x = np.exp(-x)
+        sig = 1 / (1 + exp_neg_x)
         return dA * sig * (1 - sig)
 
     def Tanh(self, x):
         """
         Hyperbolic Tangent Activation Function
         """
-        return (np.exp(x) - np.exp(-x)) / (np.exp(x) + np.exp(-x))
+        exp_x = np.exp(x)
+        exp_neg_x = np.exp(-x)
+        return (exp_x - exp_neg_x) / (exp_x + exp_neg_x)
     
     def Derivative_Tanh(self, dA, x):
         """
         Compute the derivative of the Hyperbolic Tangent activation function.
         """
-        return dA * ( (-np.exp(x) + np.exp(-x)) / (np.exp(x) + np.exp(-x))**2 +1)
+        exp_x = np.exp(x)
+        exp_neg_x = np.exp(-x)
+        denominator = exp_x + exp_neg_x
+        return dA * ((-exp_x + exp_neg_x) / (denominator**2) + 1)
 
     def Softmax(self, x):
         """
         Softmax Activation Function
         """
-        return np.exp(x)/np.sum(np.exp(x))
+        exp_x = np.exp(x)
+        return exp_x / np.sum(exp_x)
 
     def Derivative_Softmax(self, dA, x):
         """
         Compute the derivative of the Softmax activation function.
         """
-        return dA * np.exp(x)/np.sum(np.exp(x)) * (1 - np.exp(x)/np.sum(np.exp(x)))
+        exp_x = np.exp(x)
+        sum_exp_x = np.sum(exp_x)
+        softmax_val = exp_x / sum_exp_x
+        return dA * softmax_val * (1 - softmax_val)
     
     def Elu(self, x, alpha = 1):
         """

@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 from itertools import islice
 import time
+import os
 
 def train_fidelity_r2(y_true, y_pred):
     ss_res = np.sum((y_true - y_pred) ** 2)
@@ -67,6 +68,7 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
         
         Y_hat, memory                                     = full_forward_propagation(X, params_values, network_layers)
         mean_loss                                         = get_mean_loss(Y_hat, Y, nn)
+        
         grads_values                                      = full_backward_propagation(Y_hat, Y, memory, params_values, nn, network_layers)
         params_values, previous_grads_values, _, m, v, t  = weights_update(params_values, grads_values, nn, learning_rate, previous_grads_values, momentum, m, v, t)
 
@@ -107,8 +109,13 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
     # with open(nn["NeuralNetworkModel"]["OutputFileName"]+'.pkl', 'wb') as f:
     #     pickle.dump(data, f)
 
-    # Save the data in an onnx file
-    save_onnx(nn, database, params_values, network_layers, (1, len(inputEntryIndices)), nn["NeuralNetworkModel"]["OutputFileName"]+'.onnx')
+    # Save the data in an onnx file in dedicated directory
+    single_onnx_dir = "single_trained_onnx_models"
+    if not os.path.exists(single_onnx_dir):
+        os.makedirs(single_onnx_dir)
+    
+    output_path = os.path.join(single_onnx_dir, nn["NeuralNetworkModel"]["OutputFileName"]+'.onnx')
+    save_onnx(nn, database, params_values, network_layers, (1, len(inputEntryIndices)), output_path)
 
     # Final log message
 

@@ -4,7 +4,10 @@
     "allow": [
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(grep:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": []
   }

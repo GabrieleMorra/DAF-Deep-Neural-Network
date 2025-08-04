@@ -7,6 +7,170 @@ from collections import defaultdict
 from queue import Queue, Empty
 
 class RealTimeTableGUI:
+    def configure_optimal_column_widths(self):
+        """Calculate optimal column widths based on header text and adjust window size"""
+        import tkinter.font as tkFont
+        
+        # Get font for measuring text width
+        header_font = tkFont.Font(family='Segoe UI', size=10, weight='bold')
+        
+        # Define minimum widths for different column types
+        min_widths = {
+            'ID': 40,
+            'Architecture': 80,
+            'Epoch': 60,
+            'R2': 70,
+            'Summary': 80,
+            'Status': 70
+        }
+        
+        # Get all column headers
+        headers = []
+        for col in self.tree['columns']:
+            header_text = self.tree.heading(col)['text']
+            headers.append(header_text)
+        
+        # Calculate widths for each column
+        column_widths = []
+        total_width = 0
+        
+        for i, header in enumerate(headers):
+            col_id = f'#{i+1}'
+            
+            # Measure header text width
+            text_width = header_font.measure(header)
+            
+            # Add padding (25px extra for borders, sorting arrows, etc.)
+            optimal_width = text_width + 25
+            
+            # Apply minimum width based on column type
+            if header == 'ID':
+                optimal_width = max(optimal_width, min_widths['ID'])
+            elif header == 'Architecture':
+                optimal_width = max(optimal_width, min_widths['Architecture'])
+            elif header == 'Epoch':
+                optimal_width = max(optimal_width, min_widths['Epoch'])
+            elif 'R²' in header or 'R2' in header:
+                optimal_width = max(optimal_width, min_widths['R2'])
+            elif header == 'Status':
+                optimal_width = max(optimal_width, min_widths['Status'])
+            else:
+                optimal_width = max(optimal_width, min_widths['Summary'])
+            
+            column_widths.append(optimal_width)
+            total_width += optimal_width
+            
+            # Set column width
+            self.tree.column(col_id, width=optimal_width, anchor='center')
+        
+        # Adjust window width to fit all columns
+        self.adjust_window_size(total_width)
+    
+    def adjust_window_size(self, table_width):
+        """Adjust window size to fit table while respecting screen limits"""
+        # Get screen dimensions
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Calculate required window width (table + margins + scrollbars)
+        margin_width = 50  # Left/right margins
+        scrollbar_width = 20  # Vertical scrollbar
+        side_panel_width = 420  # Right configuration panel
+        
+        required_width = table_width + margin_width + scrollbar_width + side_panel_width
+        
+        # Limit to 95% of screen width (consistent with setup_gui)
+        max_window_width = int(screen_width * 0.95)
+        optimal_width = min(required_width, max_window_width)
+        
+        # Set minimum width to ensure usability
+        min_window_width = 1000
+        window_width = max(optimal_width, min_window_width)
+        
+        # Keep current height but limit to screen
+        current_height = 900
+        max_window_height = int(screen_height * 0.9)  # Keep 90% for height (taskbar space)
+        window_height = min(current_height, max_window_height)
+        
+        # Center window on screen
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        
+        # Update window geometry
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        
+        print(f"[GUI] Window adjusted to {window_width}x{window_height} (table width: {table_width}px)")
+        if required_width > max_window_width:
+            print(f"[GUI] Table too wide for screen, horizontal scrolling enabled")
+    
+    def draw_dnn_logo(self, canvas):
+        """Draw a clean DNN architecture logo"""
+        # Logo colors
+        node_color = '#FFFFFF'
+        connection_color = '#E8F4FD'
+        
+        # Input layer (3 nodes)
+        input_nodes = [(15, 15), (15, 30), (15, 45)]
+        
+        # Hidden layer 1 (4 nodes)
+        hidden1_nodes = [(35, 10), (35, 22), (35, 38), (35, 50)]
+        
+        # Hidden layer 2 (3 nodes)
+        hidden2_nodes = [(55, 15), (55, 30), (55, 45)]
+        
+        # Output layer (2 nodes)
+        output_nodes = [(70, 22), (70, 38)]
+        
+        # Draw connections
+        # Input to Hidden1
+        for input_pos in input_nodes:
+            for hidden_pos in hidden1_nodes:
+                canvas.create_line(input_pos[0], input_pos[1], 
+                                 hidden_pos[0], hidden_pos[1],
+                                 fill=connection_color, width=1)
+        
+        # Hidden1 to Hidden2
+        for h1_pos in hidden1_nodes:
+            for h2_pos in hidden2_nodes:
+                canvas.create_line(h1_pos[0], h1_pos[1], 
+                                 h2_pos[0], h2_pos[1],
+                                 fill=connection_color, width=1)
+        
+        # Hidden2 to Output
+        for h2_pos in hidden2_nodes:
+            for out_pos in output_nodes:
+                canvas.create_line(h2_pos[0], h2_pos[1], 
+                                 out_pos[0], out_pos[1],
+                                 fill=connection_color, width=1)
+        
+        # Draw nodes
+        node_radius = 3
+        
+        # Input nodes
+        for pos in input_nodes:
+            canvas.create_oval(pos[0]-node_radius, pos[1]-node_radius,
+                             pos[0]+node_radius, pos[1]+node_radius,
+                             fill=node_color, outline='#1976D2', width=1)
+        
+        # Hidden layer 1 nodes
+        for pos in hidden1_nodes:
+            canvas.create_oval(pos[0]-node_radius, pos[1]-node_radius,
+                             pos[0]+node_radius, pos[1]+node_radius,
+                             fill=node_color, outline='#1976D2', width=1)
+        
+        # Hidden layer 2 nodes
+        for pos in hidden2_nodes:
+            canvas.create_oval(pos[0]-node_radius, pos[1]-node_radius,
+                             pos[0]+node_radius, pos[1]+node_radius,
+                             fill=node_color, outline='#1976D2', width=1)
+        
+        # Output nodes (slightly larger)
+        output_radius = 4
+        for pos in output_nodes:
+            canvas.create_oval(pos[0]-output_radius, pos[1]-output_radius,
+                             pos[0]+output_radius, pos[1]+output_radius,
+                             fill=node_color, outline='#FF6F00', width=2)
+
     def __init__(self, param_combinations, max_epochs=15000, config_path="NeuralNetworkSweep.json"):
         self.param_combinations = param_combinations
         self.max_epochs = max_epochs
@@ -175,8 +339,22 @@ class RealTimeTableGUI:
         # Main window with modern styling
         self.root = tk.Tk()
         self.root.title("Multi-Thread Neural Network Architecture Sweep - Real-Time Training Monitor")
-        self.root.geometry("1200x900")  # Increased size for better visibility
+        
+        # Get screen dimensions and limit window size
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Set maximum window size to 95% of screen dimensions
+        max_width = int(screen_width * 0.95)
+        max_height = int(screen_height * 0.9)
+        
+        # Configure window
         self.root.configure(bg='#f8f9fa')
+        self.root.maxsize(max_width, max_height)
+        
+        # Store dimensions for later use
+        self.max_window_width = max_width
+        self.max_window_height = max_height
         
         # Professional academic color palette
         self.colors = {
@@ -198,12 +376,12 @@ class RealTimeTableGUI:
         title_frame.pack(fill=tk.X, padx=0, pady=0)
         title_frame.pack_propagate(False)
         
-        # Create logo canvas
-        logo_canvas = tk.Canvas(title_frame, width=80, height=80, bg=self.colors['primary'], highlightthickness=0)
-        logo_canvas.pack(side=tk.LEFT, padx=(20, 10), pady=10)
+        # Create DNN architecture logo
+        logo_canvas = tk.Canvas(title_frame, width=80, height=60, bg=self.colors['primary'], highlightthickness=0)
+        logo_canvas.pack(side=tk.LEFT, padx=(20, 10), pady=20)
         
-        # Draw neural network logo
-        self.draw_neural_network_logo(logo_canvas)
+        # Draw simple DNN architecture
+        self.draw_dnn_logo(logo_canvas)
         
         # Title and subtitle container
         text_container = tk.Frame(title_frame, bg=self.colors['primary'])
@@ -319,9 +497,9 @@ class RealTimeTableGUI:
         col_num += 1
         self.tree.heading(f'#{col_num}', text='Best Epoch', command=lambda: self.sort_column('Best_Epoch'))
         col_num += 1
-        self.tree.heading(f'#{col_num}', text='Training R²', command=lambda: self.sort_column('Training_R2'))
+        self.tree.heading(f'#{col_num}', text='Training Fidelity', command=lambda: self.sort_column('Training_R2'))
         col_num += 1
-        self.tree.heading(f'#{col_num}', text='Validation R²', command=lambda: self.sort_column('Validation_R2'))
+        self.tree.heading(f'#{col_num}', text='Validation Fidelity', command=lambda: self.sort_column('Validation_R2'))
         col_num += 1
         self.tree.heading(f'#{col_num}', text='Loss', command=lambda: self.sort_column('Loss'))
         col_num += 1
@@ -329,31 +507,8 @@ class RealTimeTableGUI:
         # Status column
         self.tree.heading(f'#{col_num}', text='Status', command=lambda: self.sort_column('Status'))
         
-        # Configure compact column widths
-        self.tree.column('#1', width=50, anchor='center')   # ID
-        self.tree.column('#2', width=100, anchor='center')  # Architecture
-        self.tree.column('#3', width=80, anchor='center')   # Epoch
-        
-        col_num = 4
-        # Configure current R² columns
-        for i in range(len(self.dataset_info['output_variables'])):
-            self.tree.column(f'#{col_num}', width=80, anchor='center')
-            col_num += 1
-        
-        # Configure summary columns
-        self.tree.column(f'#{col_num}', width=90, anchor='center')  # Avg Max R²
-        col_num += 1
-        self.tree.column(f'#{col_num}', width=80, anchor='center')  # Best Epoch
-        col_num += 1
-        self.tree.column(f'#{col_num}', width=90, anchor='center')  # Training R²
-        col_num += 1
-        self.tree.column(f'#{col_num}', width=90, anchor='center')  # Validation R²
-        col_num += 1
-        self.tree.column(f'#{col_num}', width=100, anchor='center')  # Loss
-        col_num += 1
-        
-        # Configure status column
-        self.tree.column(f'#{col_num}', width=90, anchor='center')
+        # Calculate optimal column widths based on headers
+        self.configure_optimal_column_widths()
         
         # Configure professional status colors
         self.tree.tag_configure('waiting', foreground=self.colors['warning'], font=('Segoe UI', 10))
@@ -366,13 +521,18 @@ class RealTimeTableGUI:
         self.training_blink_state = False
         self.setup_training_blink()
         
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scrollbar.set)
+        # Add vertical scrollbar
+        v_scrollbar = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=v_scrollbar.set)
         
-        # Pack table and scrollbar
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 15))
+        # Add horizontal scrollbar
+        h_scrollbar = ttk.Scrollbar(table_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(xscrollcommand=h_scrollbar.set)
+        
+        # Pack table and scrollbars
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(15, 0))
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 15))
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(0, 15))
         
         # Enhanced event bindings
         self.tree.bind('<ButtonRelease-1>', self.on_tree_click)
@@ -398,7 +558,7 @@ class RealTimeTableGUI:
             # Create initial values: ID, Architecture, Epoch, Current R² scores, Summary columns, Status
             initial_values = [str(idx), arch_label, '0']
             initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))  # Current R² scores
-            initial_values.extend(['0.00', '0', '0.00', '0.00', '0.00E+00'])  # Max R² (or Avg Max R²), Best Epoch, Training R², Validation R², Loss
+            initial_values.extend(['0.00', '0', '0.00', '0.00', '0.00E+00'])  # Max R² (or Avg Max R²), Best Epoch, Training Fidelity, Validation Fidelity, Loss
             initial_values.append('Waiting')  # Status
             
             # Insert row
@@ -750,8 +910,7 @@ class RealTimeTableGUI:
         # Create invisible hover areas for each node
         self.create_hover_areas(canvas)
         
-        # Start subtle logo animation
-        self.animate_logo()
+        # Logo animation removed - static logo only
     
     def create_hover_areas(self, canvas):
         """Create invisible hover areas around each node"""
@@ -1027,18 +1186,24 @@ class RealTimeTableGUI:
                 self.model_data[model_id]['max_r2_scores'][i] = r2_val
                 self.model_data[model_id]['max_r2_epochs'][i] = epoch
         
-        # Calculate summary statistics
-        max_epochs = self.model_data[model_id]['max_r2_epochs']
-        max_r2_scores = self.model_data[model_id]['max_r2_scores']
+        # Calculate current average R² for this epoch
+        current_avg_r2 = sum(current_r2) / len(current_r2) if current_r2 else 0
         
-        if any(ep > 0 for ep in max_epochs):
-            # Best epoch is when the best overall performance was achieved
-            best_epoch = max(max_epochs)
-            # Average of maximum R² scores achieved
-            avg_max_r2 = sum(max_r2_scores) / len(max_r2_scores) if max_r2_scores else 0
-            
-            self.model_data[model_id]['best_epoch'] = best_epoch
-            self.model_data[model_id]['avg_max_r2'] = avg_max_r2
+        # Track the best average R² and its epoch
+        if 'best_avg_r2' not in self.model_data[model_id]:
+            self.model_data[model_id]['best_avg_r2'] = 0
+            self.model_data[model_id]['best_epoch'] = 0
+        
+        # Update best epoch based on maximum average R²
+        if current_avg_r2 > self.model_data[model_id]['best_avg_r2']:
+            self.model_data[model_id]['best_avg_r2'] = current_avg_r2
+            self.model_data[model_id]['best_epoch'] = epoch
+        
+        # Calculate summary statistics for display
+        max_r2_scores = self.model_data[model_id]['max_r2_scores']
+        # Average of maximum R² scores achieved (for display)
+        avg_max_r2 = sum(max_r2_scores) / len(max_r2_scores) if max_r2_scores else 0
+        self.model_data[model_id]['avg_max_r2'] = avg_max_r2
         
         # Store live training metrics if provided
         if training_fidelity is not None:
@@ -1163,12 +1328,20 @@ class RealTimeTableGUI:
     
     def update_status(self):
         """Update the status bar and dashboard"""
-        completed = len([m for m in self.model_data.values() if m['completed']])
-        training = len([m for m in self.model_data.values() if m['epoch'] > 0 and not m['completed'] and not m['error']])
-        waiting = len([m for m in self.model_data.values() if m['epoch'] == 0 and not m['error']])
-        errors = len([m for m in self.model_data.values() if m['error']])
-        total = getattr(self, 'next_config_id', len(self.param_combinations))
+        # Count only non-deleted models
+        active_models = {k: v for k, v in self.model_data.items() if k not in self.deleted_models}
+        
+        completed = len([m for m in active_models.values() if m['completed']])
+        training = len([m for m in active_models.values() if m['epoch'] > 0 and not m['completed'] and not m['error']])
+        waiting = len([m for m in active_models.values() if m['epoch'] == 0 and not m['error']])
+        errors = len([m for m in active_models.values() if m['error']])
+        
+        # Total = active models + pending configurations (excluding deleted)
+        total_configs = getattr(self, 'next_config_id', len(self.param_combinations))
+        deleted_count = len(self.deleted_models)
         pending = len(getattr(self, 'pending_configurations', []))
+        
+        total = total_configs - deleted_count + pending
         
         # Update traditional status bar
         status_text = f"Total: {total} | Training: {training} | Completed: {completed} | Waiting: {waiting} | Errors: {errors}"
@@ -1199,18 +1372,23 @@ class RealTimeTableGUI:
             self.metric_cards['training']['value_label'].config(text=str(training))
             self.metric_cards['completed']['value_label'].config(text=str(completed))
             
-            # Calculate best R² from completed models
-            best_r2 = 0.0
-            completed_models = [m for m in self.model_data.values() if m.get('completed', False)]
-            if completed_models:
-                r2_values = []
-                for model in completed_models:
-                    if 'final_validation_r2' in model:
-                        r2_values.append(model['final_validation_r2'])
-                if r2_values:
-                    best_r2 = max(r2_values)
+            # Calculate best average R² from all models (completed and training)
+            best_avg_r2 = 0.0
+            all_models = list(self.model_data.values())
+            if all_models:
+                avg_r2_values = []
+                for model in all_models:
+                    # Use best_avg_r2 if available, otherwise calculate from current r2_scores
+                    if 'best_avg_r2' in model and model['best_avg_r2'] > 0:
+                        avg_r2_values.append(model['best_avg_r2'])
+                    elif 'r2_scores' in model and model['r2_scores']:
+                        current_avg = sum(model['r2_scores']) / len(model['r2_scores'])
+                        avg_r2_values.append(current_avg)
+                
+                if avg_r2_values:
+                    best_avg_r2 = max(avg_r2_values)
             
-            self.metric_cards['best_r2']['value_label'].config(text=f"{best_r2:.1f}%")
+            self.metric_cards['best_r2']['value_label'].config(text=f"{best_avg_r2:.2f}%")
             
             # Update progress bar
             if total > 0:
@@ -1307,12 +1485,32 @@ class RealTimeTableGUI:
         """Handle window close event - terminate all processes"""
         import os
         import sys
+        import subprocess
+        import platform
         print("\nGUI closing - terminating all training processes...")
+        
+        # Set global shutdown flag to gracefully stop training threads
+        try:
+            # Import the shutdown flag from main module
+            import __main__
+            if hasattr(__main__, 'shutdown_requested'):
+                __main__.shutdown_requested = True
+                print("[SHUTDOWN] Global shutdown flag set")
+        except:
+            pass
         
         # Force terminate the entire process tree
         try:
+            # First try graceful close
             self.root.quit()
             self.root.destroy()
+            
+            # Then force terminate entire process tree on Windows
+            if platform.system() == "Windows":
+                pid = os.getpid()
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], 
+                             timeout=1, capture_output=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except:
             pass
         
@@ -2099,9 +2297,20 @@ class AddConfigWindow:
         self.window = tk.Toplevel(parent_gui.root)
         self.window.title("Add New Configurations")
         self.window.geometry("1200x700")  # Wider layout with side panel
-        self.window.configure(bg='#2e2e2e')
+        self.window.configure(bg='#f8f9fa')  # Modern light background
         self.window.transient(parent_gui.root)
         self.window.grab_set()
+        
+        # Modern colors matching main window
+        self.colors = {
+            'background': '#f8f9fa',
+            'card': '#ffffff',
+            'primary': '#64b5f6',
+            'text': '#2c3e50',
+            'secondary_text': '#6c757d',
+            'border': '#e9ecef',
+            'accent': '#28a745'
+        }
         
         # Configuration list
         self.configurations = []
@@ -2109,47 +2318,69 @@ class AddConfigWindow:
         self.setup_ui()
     
     def setup_ui(self):
-        """Setup the add configuration UI with side panel layout"""
-        # Title
+        """Setup the add configuration UI with modern design"""
+        # Modern title with better styling
         title_label = tk.Label(self.window, text="Add New Architecture Configurations", 
-                              font=('Segoe UI', 16, 'bold'), fg='white', bg='#2e2e2e')
+                              font=('Segoe UI', 16, 'bold'), fg=self.colors['text'], bg=self.colors['background'])
         title_label.pack(pady=20)
         
-        # Main horizontal container
-        main_container = tk.Frame(self.window, bg='#2e2e2e')
+        # Main horizontal container with modern colors
+        main_container = tk.Frame(self.window, bg=self.colors['background'])
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
-        # Left side: Input tabs
-        left_frame = tk.Frame(main_container, bg='#2e2e2e')
+        # Left side: Input tabs with modern styling
+        left_frame = tk.Frame(main_container, bg=self.colors['background'])
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
-        # Create notebook for tabs in left frame
-        notebook = ttk.Notebook(left_frame)
+        # Create modern notebook with larger selected tab
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('Modern.TNotebook', background=self.colors['background'], borderwidth=0)
+        style.configure('Modern.TNotebook.Tab', 
+                       background=self.colors['card'],
+                       foreground=self.colors['text'],
+                       padding=[25, 8],  # Normal padding for unselected tabs
+                       font=('Segoe UI', 11),
+                       borderwidth=1,
+                       relief='solid',
+                       width=18)  # Base width for tabs
+        style.map('Modern.TNotebook.Tab',
+                 background=[('selected', self.colors['primary']),
+                            ('active', self.colors['border'])],
+                 foreground=[('selected', 'white'),
+                            ('active', self.colors['text'])],
+                 padding=[('selected', [35, 12]),  # Larger padding for selected tab
+                         ('active', [28, 9]),      # Slightly larger for hover
+                         ('!selected', [25, 8])],  # Normal for unselected
+                 font=[('selected', ('Segoe UI', 11, 'bold')),  # Bold font for selected
+                       ('!selected', ('Segoe UI', 11))])
+        
+        notebook = ttk.Notebook(left_frame, style='Modern.TNotebook')
         notebook.pack(fill=tk.BOTH, expand=True)
         
         # Tab 1: Single configuration
-        single_frame = tk.Frame(notebook, bg='#2e2e2e')
+        single_frame = tk.Frame(notebook, bg=self.colors['card'])
         notebook.add(single_frame, text="Single Configuration")
         
-        # Tab 2: Bulk configuration
-        bulk_frame = tk.Frame(notebook, bg='#2e2e2e')
+        # Tab 2: Bulk configuration  
+        bulk_frame = tk.Frame(notebook, bg=self.colors['card'])
         notebook.add(bulk_frame, text="Bulk Configuration")
         
         self.setup_single_tab(single_frame)
         self.setup_bulk_tab(bulk_frame)
         
-        # Right side: Configuration list and buttons
-        right_frame = tk.Frame(main_container, bg='#2e2e2e', width=400)
+        # Right side: Configuration list and buttons with modern styling
+        right_frame = tk.Frame(main_container, bg=self.colors['card'], width=400)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
         right_frame.pack_propagate(False)
         
         # Configurations table in right frame
         table_title = tk.Label(right_frame, text="Configurations to Add:", 
-                              font=('Segoe UI', 12, 'bold'), fg='white', bg='#2e2e2e')
+                              font=('Segoe UI', 12, 'bold'), fg=self.colors['text'], bg=self.colors['card'])
         table_title.pack(anchor='w', pady=(0, 10))
         
         # Table container
-        table_container = tk.Frame(right_frame, bg='#2e2e2e')
+        table_container = tk.Frame(right_frame, bg=self.colors['card'])
         table_container.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
         
         # Create table
@@ -2171,34 +2402,34 @@ class AddConfigWindow:
         self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Buttons in right frame
-        button_frame = tk.Frame(right_frame, bg='#2e2e2e')
+        # Buttons in right frame with modern styling
+        button_frame = tk.Frame(right_frame, bg=self.colors['card'])
         button_frame.pack(fill=tk.X, pady=(0, 20))
         
         clear_button = tk.Button(button_frame, text="Clear All", 
                                 command=self.clear_configurations,
-                                font=('Segoe UI', 11), bg='#f44336', fg='white', padx=20, pady=8)
+                                font=('Segoe UI', 11), bg='#dc3545', fg='white', padx=20, pady=8)
         clear_button.pack(fill=tk.X, pady=(0, 10))
         
         cancel_button = tk.Button(button_frame, text="Cancel", 
                                  command=self.window.destroy,
-                                 font=('Segoe UI', 11), bg='#757575', fg='white', padx=20, pady=8)
+                                 font=('Segoe UI', 11), bg='#6c757d', fg='white', padx=20, pady=8)
         cancel_button.pack(fill=tk.X, pady=(0, 10))
         
         ok_button = tk.Button(button_frame, text="Add to Sweep", 
                              command=self.confirm_add,
-                             font=('Segoe UI', 11, 'bold'), bg='#4caf50', fg='white', padx=20, pady=8)
+                             font=('Segoe UI', 11, 'bold'), bg=self.colors['accent'], fg='white', padx=20, pady=8)
         ok_button.pack(fill=tk.X)
     
     def setup_single_tab(self, parent_frame):
-        """Setup single configuration tab"""
+        """Setup single configuration tab with modern styling"""
         # Input frame
-        input_frame = tk.Frame(parent_frame, bg='#2e2e2e')
+        input_frame = tk.Frame(parent_frame, bg=self.colors['card'])
         input_frame.pack(fill=tk.X, padx=20, pady=20)
         
         # Number of layers
         tk.Label(input_frame, text="Number of Hidden Layers:", 
-                font=('Segoe UI', 12), fg='white', bg='#2e2e2e').grid(row=0, column=0, sticky='w', pady=5)
+                font=('Segoe UI', 12), fg=self.colors['text'], bg=self.colors['card']).grid(row=0, column=0, sticky='w', pady=5)
         
         self.layers_var = tk.StringVar(value="2")
         self.layers_spinbox = tk.Spinbox(input_frame, from_=1, to=5, textvariable=self.layers_var,
@@ -2206,7 +2437,7 @@ class AddConfigWindow:
         self.layers_spinbox.grid(row=0, column=1, padx=(10, 0), pady=5)
         
         # Dynamic layer inputs frame
-        self.layers_frame = tk.Frame(input_frame, bg='#2e2e2e')
+        self.layers_frame = tk.Frame(input_frame, bg=self.colors['card'])
         self.layers_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=10)
         
         self.layer_entries = []
@@ -2216,13 +2447,13 @@ class AddConfigWindow:
         add_button = tk.Button(input_frame, text="Add Configuration", 
                               command=self.add_configuration,
                               font=('Segoe UI', 11, 'bold'),
-                              bg='#1976d2', fg='white', padx=20, pady=5)
+                              bg=self.colors['primary'], fg='white', padx=20, pady=5)
         add_button.grid(row=2, column=0, columnspan=2, pady=10)
     
     def setup_bulk_tab(self, parent_frame):
-        """Setup bulk configuration tab"""
+        """Setup bulk configuration tab with modern styling"""
         # Instructions
-        instructions_frame = tk.Frame(parent_frame, bg='#2e2e2e')
+        instructions_frame = tk.Frame(parent_frame, bg=self.colors['card'])
         instructions_frame.pack(fill=tk.X, padx=20, pady=10)
         
         instruction_text = """Bulk Configuration Instructions:
@@ -2242,23 +2473,23 @@ Example for 3-layer architectures:
 This creates: 10x5x4, 10x5x8, 10x10x4, 10x10x8, etc."""
 
         instruction_label = tk.Label(instructions_frame, text=instruction_text, 
-                                    font=('Segoe UI', 10), fg='#cccccc', bg='#2e2e2e',
+                                    font=('Segoe UI', 10), fg=self.colors['secondary_text'], bg=self.colors['card'],
                                     justify=tk.LEFT, wraplength=800)
         instruction_label.pack(anchor='w')
         
         # Text area for bulk input
-        text_frame = tk.Frame(parent_frame, bg='#2e2e2e')
+        text_frame = tk.Frame(parent_frame, bg=self.colors['card'])
         text_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         tk.Label(text_frame, text="Enter layer configurations:", 
-                font=('Segoe UI', 12, 'bold'), fg='white', bg='#2e2e2e').pack(anchor='w')
+                font=('Segoe UI', 12, 'bold'), fg=self.colors['text'], bg=self.colors['card']).pack(anchor='w')
         
         # Text widget with scrollbar
-        text_container = tk.Frame(text_frame, bg='#2e2e2e')
+        text_container = tk.Frame(text_frame, bg=self.colors['card'])
         text_container.pack(fill=tk.BOTH, expand=True, pady=5)
         
         self.bulk_text = tk.Text(text_container, height=8, font=('Consolas', 11),
-                                bg='#1e1e1e', fg='white', insertbackground='white')
+                                bg='white', fg=self.colors['text'], insertbackground=self.colors['primary'])
         bulk_scrollbar = ttk.Scrollbar(text_container, orient=tk.VERTICAL, command=self.bulk_text.yview)
         self.bulk_text.configure(yscrollcommand=bulk_scrollbar.set)
         
@@ -2266,18 +2497,18 @@ This creates: 10x5x4, 10x5x8, 10x10x4, 10x10x8, etc."""
         bulk_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Example button and process button
-        button_frame = tk.Frame(text_frame, bg='#2e2e2e')
+        button_frame = tk.Frame(text_frame, bg=self.colors['card'])
         button_frame.pack(fill=tk.X, pady=5)
         
         example_button = tk.Button(button_frame, text="Load Example", 
                                   command=self.load_example,
-                                  font=('Segoe UI', 10), bg='#757575', fg='white', padx=15)
+                                  font=('Segoe UI', 10), bg='#6c757d', fg='white', padx=15)
         example_button.pack(side=tk.LEFT)
         
         process_button = tk.Button(button_frame, text="Process Bulk Input", 
                                   command=self.process_bulk_input,
                                   font=('Segoe UI', 11, 'bold'),
-                                  bg='#1976d2', fg='white', padx=20, pady=5)
+                                  bg=self.colors['primary'], fg='white', padx=20, pady=5)
         process_button.pack(side=tk.RIGHT)
     
     def update_layer_inputs(self):
@@ -2291,7 +2522,7 @@ This creates: 10x5x4, 10x5x8, 10x10x4, 10x10x8, etc."""
         
         for i in range(num_layers):
             tk.Label(self.layers_frame, text=f"Layer {i+1} Neurons:", 
-                    font=('Segoe UI', 11), fg='white', bg='#2e2e2e').grid(row=i, column=0, sticky='w', pady=2)
+                    font=('Segoe UI', 11), fg=self.colors['text'], bg=self.colors['card']).grid(row=i, column=0, sticky='w', pady=2)
             
             entry = tk.Entry(self.layers_frame, font=('Segoe UI', 11), width=10)
             entry.grid(row=i, column=1, padx=(10, 0), pady=2)

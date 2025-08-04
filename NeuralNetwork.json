@@ -1,25 +1,25 @@
 {
     "NeuralNetworkModel": {
-        "loss": "MSE", 
+        "loss": "LC", 
         "UpdateMethod": "Adam",
         "learning_rate": 1E-3,
         "training_testing_ratio": 0.80,
         "epochs": 20500,
-        "inputEntryIndices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "outputEntryIndices": [13],
-        "InputFileName": "Boston_Housing.csv",
-        "Delimiter": ",",
-        "OutputFileName": "Trained_DNN",
+        "inputEntryIndices": [0, 1, 2, 3, 4, 5, 6, 7],
+        "outputEntryIndices": [8, 9, 10],
+        "InputFileName": "CFD_2D.csv",
+        "Delimiter": ";",
+        "OutputFileName": "Trained_DNN_CFD_2D",
         "ShowTestEvery": 250
     },
     "FirstHiddenLayer": {
-        "neurons": 7, "activation": "elu"
+        "neurons": 35, "activation": "elu"
     },
     "SecondHiddenLayer": {
-        "neurons": 6, "activation": "elu"
+        "neurons": 8, "activation": "elu"
     },
     "ThirdHiddenLayer": {
-        "neurons": 5, "activation": "elu"
+        "neurons": 35, "activation": "elu"
     },
     "OutputLayer": {
         "activation": "tanh"

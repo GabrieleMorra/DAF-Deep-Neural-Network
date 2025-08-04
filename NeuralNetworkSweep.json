@@ -2,20 +2,34 @@
     "SweepConfiguration": {
         "first_hidden_neurons_range": [
             5,
-            13
+            8,
+            13,
+            20,
+            35
         ],
         "second_hidden_neurons_range": [
             5,
-            13
+            8,
+            13,
+            20,
+            35
+        ],
+        "third_hidden_neurons_range": [
+            5,
+            8,
+            13,
+            20,
+            35
         ],
         "total_layers_range": [
             1,
-            2
+            2,
+            3
         ],
-        "max_threads": 4
+        "max_threads": 3
     },
     "NeuralNetworkModel": {
-        "loss": "MSE",
+        "loss": "LC",
         "UpdateMethod": "Adam",
         "learning_rate": 1E-3,
         "training_testing_ratio": 0.8,
@@ -28,18 +42,13 @@
             4,
             5,
             6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12
+            7
         ],
         "outputEntryIndices": [
-            13
+            8, 9, 10
         ],
-        "InputFileName": "Boston_Housing.csv",
-        "Delimiter": ",",
+        "InputFileName": "CFD_2D.csv",
+        "Delimiter": ";",
         "ShowTestEvery": 500,
         "silent_mode": true
     },
@@ -48,6 +57,9 @@
             "activation": "elu"
         },
         "SecondHiddenLayer": {
+            "activation": "elu"
+        },
+        "ThirdHiddenLayer": {
             "activation": "elu"
         },
         "OutputLayer": {

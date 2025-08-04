@@ -1,11 +1,14 @@
 import numpy as np
 from ActivationFunctions import *
 
+# Create singleton activation function instance
+_activation_functions = ActivationFunctions()
+
 def single_layer_forward_propagation(A_prev, W_curr, b_curr, activationFunction):
     
     Z_curr = np.dot(A_prev, W_curr) + b_curr
-    Z_curr = Z_curr.astype(float)
-    af = ActivationFunctions()
+    # Use singleton instance instead of creating new object
+    af = _activation_functions
     if activationFunction == "relu":
         A_curr = af.ReLU(Z_curr)
     elif activationFunction == "sigmoid":
