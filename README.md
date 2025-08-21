@@ -2,6 +2,7 @@
 
 **A High-Performance Neural Network Training System for Scientific Computing and Engineering Applications**
 
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/numpy-1.24+-red.svg)](https://numpy.org/)
 
@@ -436,7 +437,7 @@ If you use this framework in your research, please cite:
 @software{daf_neural_network_2024,
   title={DAF Deep Neural Network Framework: A High-Performance System for Scientific Computing Applications},
   author={[Author Names]},
-  year={2024},
+  year={2025},
   url={https://github.com/[repository]},
   version={1.0.0}
 }
@@ -464,7 +465,7 @@ For technical issues and feature requests:
 ---
 
 **Framework Version**: 1.0.0  
-**Last Updated**: [Current Date]  
+**Last Updated**: 21 August, 2025
 **Compatibility**: Python 3.11+, NumPy 1.24+, ONNX 1.14+
 
 ---
