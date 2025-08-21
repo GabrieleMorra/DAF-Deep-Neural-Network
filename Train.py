@@ -11,15 +11,20 @@ import numpy as np
 from itertools import islice
 import time
 import os
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import threading
 
 def train_fidelity_r2(y_true, y_pred):
+    """Calculate R² training fidelity score as percentage"""
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     r2 = 1 - (ss_res / ss_tot)
-    return max(0, r2 * 100)  # Impedisce valori negativi
+    return max(0, r2 * 100)  # Prevent negative values
 
 
-def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=None, pause_check_func=None):
+
+def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode=False, real_time_loss_plot=True, pause_check_func=None):
 
     X                   = database['X_train']
     Y                   = database['Y_train']
@@ -33,7 +38,6 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
     inputEntryIndices   = nn["NeuralNetworkModel"]['inputEntryIndices']
     headers             = database['headers']
     ShowEvery           = nn["NeuralNetworkModel"]['ShowTestEvery']
-    silent_mode         = nn["NeuralNetworkModel"].get('silent_mode', False)
     
     network_layers = dict(islice(nn.items(), 1, None))
 
@@ -47,7 +51,21 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
     v = {p: 0 for p in params_values.keys()}
     t = 0
 
-    # Voglio contare il tempo di esecuzione del training
+    # Initialize real-time visualization if enabled
+    if real_time_loss_plot:
+        plt.ion()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_xlabel('Epochs')
+        ax.set_ylabel('Loss ')
+        ax.set_title('Training Loss Evolution - Real Time')
+        ax.set_yscale('log')
+        ax.grid(True, which='major', alpha=0.7)  # Major grid lines
+        ax.grid(True, which='minor', alpha=0.3)  # Minor grid lines
+        line, = ax.plot([], [], 'b-', linewidth=2)
+        plt.show(block=False)
+
+
+    # Track training execution time
     start_time = time.time()
 
     for i in range(epochs + 1):
@@ -73,22 +91,53 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
         params_values, previous_grads_values, _, m, v, t  = weights_update(params_values, grads_values, nn, learning_rate, previous_grads_values, momentum, m, v, t)
 
         training_fidelity  = train_fidelity_r2(Y, Y_hat)
-        accuracy_per_variable, validation_fidelity, r2_per_variable = test(X_valid, Y_valid, params_values, network_layers, mean_loss, momentum, i, min_data, max_data, outputEntryIndices, training_fidelity, ShowEvery, silent_mode)
+        
+        # OPTIMIZATION: Run validation only every ShowEvery epochs instead of every epoch
+        if i % ShowEvery == 0 or i == epochs:  # Also run at final epoch
+            accuracy_per_variable, validation_fidelity, r2_per_variable = test(X_valid, Y_valid, params_values, network_layers, mean_loss, momentum, i, min_data, max_data, outputEntryIndices, training_fidelity, ShowEvery, silent_mode)
+        else:
+            # Keep last values for plotting consistency
+            if 'validation_fidelity' not in locals():
+                validation_fidelity = 0
+                r2_per_variable = [0] * len(outputEntryIndices)
+                accuracy_per_variable = [0] * len(outputEntryIndices)
 
         momentum_history.append(momentum)
         loss_history.append(mean_loss)
+        
+        # Update real-time plot every 50 epochs to reduce overhead
+        if real_time_loss_plot and i % 50 == 0 and len(loss_history) > 1: 
+            try:
+                epochs_range = list(range(len(loss_history)))
+                line.set_data(epochs_range, loss_history)
+                ax.relim()
+                ax.autoscale_view()
+                plt.draw()
+                plt.pause(0.001)
+            except:
+                pass  # Ignore plotting errors to avoid interrupting training
+        
         
         # Send data for real-time plotting if available
         if data_queue is not None and model_id is not None and i % ShowEvery == 0:
             # Send comprehensive training data: model_id, epoch, r2_per_variable, training_fidelity, validation_fidelity, mean_loss
             data_queue.put((model_id, i, r2_per_variable, training_fidelity, validation_fidelity, mean_loss))
         
-    # Calcolo il tempo di esecuzione del training
+    # Close real-time plot
+    if real_time_loss_plot:
+        try:
+            plt.ioff()
+            plt.close(fig)
+        except:
+            pass
+    
+    
+    # Calculate training execution time
     end_time = time.time()
     elapsed_time = end_time - start_time
     elapsed_time = time.strftime("%H:%M:%S", time.gmtime(elapsed_time))
 
-    # Saving the data
+    # Save training data and model artifacts
     data = {
         'nn': nn,
         'X': X,
@@ -131,7 +180,7 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
     len(f"Activation functions: ")
     )
 
-    # Scrivi su terminale tutti i risultati ottenuti:
+    # Display training results summary
     if not silent_mode:
         print("\nTraining completed successfully"
         "\n\n"
@@ -150,9 +199,9 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, gui_ref=Non
         f"Validation fidelity    : {validation_fidelity:.3f}%\n"
         f"Mean loss function     : {mean_loss:.2E}\n"
         f"Elapsed time           : {elapsed_time}\n"
-        f"R² score per variabile :\n" + "\n".join(f"\t{header}: {acc:.2f}%" for header, acc in zip(database['headers'][outputEntryIndices], accuracy_per_variable)) + "\n"
+        f"R² score per variable  :\n" + "\n".join(f"\t{header}: {acc:.2f}%" for header, acc in zip(database['headers'][outputEntryIndices], accuracy_per_variable)) + "\n"
         "\n"
-        "End of the program"
+        "Training process completed"
         )
 
     return {

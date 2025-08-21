@@ -2,12 +2,21 @@ import pandas as pd
 import numpy as np
 
 def get_database(nn):
-    # Loading the data
+    """
+    Load and preprocess dataset for neural network training.
+    
+    Args:
+        nn: Neural network configuration dictionary
+        
+    Returns:
+        Database: Dictionary containing training/validation data and metadata
+    """
+    # Load dataset from CSV file
     data       = pd.read_csv(nn["NeuralNetworkModel"]["InputFileName"], delimiter=nn["NeuralNetworkModel"]["Delimiter"])
     headers    = data.columns
     data       = np.array(data)
     
-    # Check for NaN values
+    # Check for NaN values and report their locations
     nan_mask = np.isnan(data)
     if np.any(nan_mask):
         nan_positions = np.where(nan_mask)
@@ -16,13 +25,13 @@ def get_database(nn):
             row, col = nan_positions[0][i], nan_positions[1][i]
             print(f"  Row {row}, Column {col} ({headers[col]})")
     
-    # Mix data to avoid bias
+    # Shuffle data to avoid bias in training
     m, n       = data.shape
             
     max_data   = np.amax(data, axis=0)
     min_data   = np.amin(data, axis=0)
 
-    # Split data first, then normalize inputs and outputs separately
+    # Set seed for reproducible data shuffling
     np.random.seed(1)  # Set seed for reproducible shuffling
     np.random.shuffle(data)
     id_train = np.round(nn["NeuralNetworkModel"]["training_testing_ratio"]*m).astype(int)
@@ -39,7 +48,7 @@ def get_database(nn):
     X_valid_raw = data_valid[:, inputEntryIndices]
     Y_valid_raw = data_valid[:, outputEntryIndices]
     
-    # Mix data to avoid bias - normalize all data with min-max using global min/max
+    # Normalize all data using global min-max scaling for consistency
     X_train = (X_train_raw - min_data[inputEntryIndices]) / (max_data[inputEntryIndices] - min_data[inputEntryIndices])
     Y_train = (Y_train_raw - min_data[outputEntryIndices]) / (max_data[outputEntryIndices] - min_data[outputEntryIndices])
     X_valid = (X_valid_raw - min_data[inputEntryIndices]) / (max_data[inputEntryIndices] - min_data[inputEntryIndices])

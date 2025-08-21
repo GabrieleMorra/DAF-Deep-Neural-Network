@@ -1,13 +1,24 @@
 import numpy as np
 from ActivationFunctions import *
 
-# Create singleton activation function instance
+# Singleton activation function instance for memory efficiency
 _activation_functions = ActivationFunctions()
 
 def single_layer_forward_propagation(A_prev, W_curr, b_curr, activationFunction):
+    """
+    Perform forward propagation for a single neural network layer.
     
+    Args:
+        A_prev: Activations from previous layer (input)
+        W_curr: Weight matrix for current layer
+        b_curr: Bias vector for current layer  
+        activationFunction: Activation function name (string)
+        
+    Returns:
+        tuple: (A_curr, Z_curr) - activated output and linear transformation
+    """
     Z_curr = np.dot(A_prev, W_curr) + b_curr
-    # Use singleton instance instead of creating new object
+    # Use singleton instance for performance optimization
     af = _activation_functions
     if activationFunction == "relu":
         A_curr = af.ReLU(Z_curr)

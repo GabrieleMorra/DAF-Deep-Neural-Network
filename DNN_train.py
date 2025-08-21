@@ -16,7 +16,7 @@ def convert_json_format(new_nn):
     for key, value in new_nn.items():
         if "Layer" in key:
             if key == last_layer_key:
-                # Gestisci l'ultimo layer separatamente
+                # Handle output layer separately with appropriate dimensions
                 old_nn[key] = {
                     "input_dim": previous_neurons,
                     "output_dim": len(new_nn["NeuralNetworkModel"]["outputEntryIndices"]),
@@ -30,7 +30,7 @@ def convert_json_format(new_nn):
                 }
                 previous_neurons = value["neurons"]
         else:
-            # Copia la sezione "NeuralNetworkModel" senza modifiche
+            # Copy "NeuralNetworkModel" section without modifications
             old_nn[key] = value
 
     return old_nn
@@ -51,7 +51,7 @@ dataset_name = os.path.splitext(input_filename)[0]
 output_file = f"Trained_DNN_{dataset_name}"
 
 # Train the neural network and get results
-result = TrainNeuralNetwork(nnModel, Database)
+result = TrainNeuralNetwork(nnModel, Database, silent_mode=False)
 
 
 if result is not None:

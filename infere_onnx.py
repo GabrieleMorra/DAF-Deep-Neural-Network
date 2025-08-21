@@ -38,10 +38,10 @@ def infere(input_data, session):
     session: ONNX runtime session 
     """
     
-    input_name = session.get_inputs()[0].name  # Assume un solo input
+    input_name = session.get_inputs()[0].name  # Assume single input
 
     if len(input_data.shape) == 1:
-        input_data = input_data.reshape(1, -1)  # Aggiunge batch dimension
+        input_data = input_data.reshape(1, -1)  # Add batch dimension
     
     input_feed = {input_name: input_data.astype(np.float32)}
 
@@ -59,11 +59,11 @@ def initialize(file_path, verbose=False):
     input_names, output_names, input_shape, output_shape = get_input_output_variables(model, session)
         
     if verbose == True:
-        print("ONNX caricato con successo.\n")
-        print("Variabili di input:", input_names)
-        print("Variabili di output:", output_names, "\n")
+        print("ONNX model loaded successfully.\n")
+        print("Input variables:", input_names)
+        print("Output variables:", output_names, "\n")
     
-    # Restituisci tutto ciò che serve per le simulazioni future
+    # Return all necessary data for future simulations
     return input_names, output_names, input_shape, output_shape
 
 if __name__ == "__main__":

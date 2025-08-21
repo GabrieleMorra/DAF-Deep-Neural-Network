@@ -97,7 +97,7 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
     if not sweep_config["NeuralNetworkModel"].get("silent_mode", False):
         print(f"[TRAINING] Starting model configuration: {model_id}")
     
-    # Costruisci la configurazione dal template
+    # Build configuration from template
     config = {
         "NeuralNetworkModel": sweep_config["NeuralNetworkModel"].copy()
     }
@@ -133,7 +133,7 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
         "activation": sweep_config["LayerTemplate"]["OutputLayer"]["activation"]
     }
     
-    # Converti al formato richiesto da TrainNeuralNetwork
+    # Convert to format required by TrainNeuralNetwork
     nnModel = convert_json_format(config)
     
     # Debug: Print actual architecture (always show for debugging)

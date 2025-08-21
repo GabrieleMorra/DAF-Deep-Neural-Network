@@ -10,13 +10,13 @@ def get_accuracy_value(Y_hat, Y, min_data, max_data, outputIndexEntry, threshold
     # cond = np.abs(diff_percent) < threshold
     # accuracy = np.mean(cond, axis=0) * 100
 
-    # Calcoliamo R² per ogni variabile di output
+    # Calculate R² for each output variable
     num_outputs = Y.shape[1]  
     fidelity_scores = []
     for i in range(num_outputs):
         ss_res = np.sum((Y[:, i] - Y_hat[:, i]) ** 2)
         ss_tot = np.sum((Y[:, i] - np.mean(Y[:, i])) ** 2)
-        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0  # Evita divisione per zero
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0  # Avoid division by zero
         r2 = max(0, r2) 
         fidelity_scores.append(r2*100)
 

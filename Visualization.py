@@ -1,561 +1,819 @@
-import matplotlib.pyplot as plt
+"""
+High-Quality Scientific Visualization Module for Deep Neural Networks
+Designed for Q1 Journal Publication Standards
+
+Author: Scientific Computing Module
+Purpose: Generate publication-ready plots for DNN regression analysis
+"""
+
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
-from matplotlib.gridspec import GridSpec
-from FullFwdPropagation import full_forward_propagation
-from itertools import islice
-import os
+import pandas as pd
 import pickle
+import os
+from itertools import islice
+from scipy.stats import pearsonr, spearmanr
+from scipy import signal
+from sklearn.preprocessing import StandardScaler
+import shap
+# Import necessary modules for neural network operations
+from FullFwdPropagation import full_forward_propagation
+from infere_onnx import infere, read, check
 
-# Set professional plotting style
-try:
-    plt.style.use('seaborn-v0_8-darkgrid')
-except OSError:
-    try:
-        plt.style.use('seaborn-darkgrid')
-    except OSError:
-        plt.style.use('default')
-        
-sns.set_palette("husl")
-
-def visualize_NN_results(pkl_file=None, output_dir="visualizations"):
+def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_names=None):
     """
-    Create comprehensive visualization of neural network training results from PKL file.
+    Generate high-quality scientific visualizations for neural network training results.
+    Creates only two essential plots suitable for Q1 journal publications:
+    1. Training convergence analysis (error history)
+    2. SHAP analysis for model interpretability
     
     Parameters:
     -----------
     pkl_file : str, optional
-        Path to PKL file. If None, looks for most recent PKL file in current directory
+        Path to PKL file containing training results
     output_dir : str
-        Directory to save plots
+        Directory to save visualizations and data files
+    latex_var_names : dict, optional
+        Dictionary mapping variable names to LaTeX formatted names
+        Example: {'Mach': r'$M_{\infty}$', 'Alpha': r'$\alpha$', 'Cl': r'$C_L$'}
     """
     
-    # Find PKL file if not specified
+    # Find and load PKL file for basic data
     if pkl_file is None:
-        # First look for files with the new naming convention
         trained_pkl_files = [f for f in os.listdir('.') if f.startswith('Trained_DNN_') and f.endswith('.pkl')]
-        
         if trained_pkl_files:
-            # Get most recent Trained_DNN_ file
             pkl_file = max(trained_pkl_files, key=os.path.getmtime)
-            print(f"Using most recent trained model: {pkl_file}")
         else:
-            # Fallback to any PKL file
             pkl_files = [f for f in os.listdir('.') if f.endswith('.pkl')]
             if not pkl_files:
                 print("ERROR: No PKL files found! Train a model first.")
                 return False
-            
-            # Get most recent PKL file
             pkl_file = max(pkl_files, key=os.path.getmtime)
-            print(f"Using most recent PKL file: {pkl_file}")
     
     if not os.path.exists(pkl_file):
         print(f"ERROR: PKL file {pkl_file} not found!")
         return False
     
-    print(f"Loading training data from {pkl_file}...")
+    print(f"Loading training data from: {pkl_file}")
     
-    # Load PKL data
+    # Load training data from PKL (but not the predictions)
     with open(pkl_file, 'rb') as f:
         stored_data = pickle.load(f)
     
-    # Extract all necessary data
-    X_train = stored_data['X']
-    Y_train = stored_data['Y']
-    X_valid = stored_data['X_valid']
-    Y_valid = stored_data['Y_valid']
-    params_values = stored_data['params_values']
-    nn = stored_data['nn']
-    min_data = stored_data['min_data']
-    max_data = stored_data['max_data']
-    outputIndexEntry = stored_data['outputIndexEntry']
+    # Extract metadata from PKL
     loss_history = stored_data['loss_history']
     headers = stored_data['headers']
+    outputIndexEntry = stored_data['outputIndexEntry']
+    nn = stored_data['nn']
+    min_data = stored_data.get('min_data', None)
+    max_data = stored_data.get('max_data', None)
     
-    # Calculate R² scores for validation
-    network_layers = dict(islice(nn.items(), 1, None))
-    Y_hat_train, _ = full_forward_propagation(X_train, params_values, network_layers)
-    Y_hat_valid, _ = full_forward_propagation(X_valid, params_values, network_layers)
+    # Load ORIGINAL DIMENSIONAL DATA from CSV file specified in JSON
+    input_filename = nn["NeuralNetworkModel"]["InputFileName"]
+    delimiter = nn["NeuralNetworkModel"].get("Delimiter", ",")
+    input_indices = nn["NeuralNetworkModel"]["inputEntryIndices"]
+    output_indices = nn["NeuralNetworkModel"]["outputEntryIndices"]
     
-    # Calculate R² per variable
-    from Train import train_fidelity_r2
-    accuracy_per_variable = []
-    for i in range(Y_valid.shape[1]):
-        r2 = train_fidelity_r2(Y_valid[:, i], Y_hat_valid[:, i])
-        accuracy_per_variable.append(r2 / 100.0)  # Convert to 0-1 scale
+    if not os.path.exists(input_filename):
+        print(f"ERROR: Input data file {input_filename} not found!")
+        return False
     
-    # Extract output variable names
-    output_names = [headers[i] if i < len(headers) else f"Output_{i}" for i in outputIndexEntry]
+    # Load original CSV data
+    import pandas as pd
+    df = pd.read_csv(input_filename, delimiter=delimiter)
     
-    print(f"Data loaded successfully!")
+    print(f"Original dataset shape: {df.shape}")
+    print(f"Available columns: {list(df.columns)}")
+    
+    # Extract original dimensional input and output data
+    X_original = df.iloc[:, input_indices].values
+    Y_original = df.iloc[:, output_indices].values
+    
+    # Use the same train/test split ratio as in training
+    training_ratio = nn["NeuralNetworkModel"]["training_testing_ratio"]
+    split_idx = int(len(X_original) * training_ratio)
+    
+    X_train = X_original[:split_idx]
+    Y_train = Y_original[:split_idx]
+    X_valid = X_original[split_idx:]
+    Y_valid = Y_original[split_idx:]
+    
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(f"\nSuccessfully loaded original dimensional data:\n")
     print(f"   Training samples: {X_train.shape[0]:,}")
     print(f"   Validation samples: {X_valid.shape[0]:,}")
     print(f"   Input features: {X_train.shape[1]}")
     print(f"   Output variables: {Y_train.shape[1]}")
-    print(f"   Training epochs: {len(loss_history):,}")
-    print(f"   Average R² score: {np.mean(accuracy_per_variable):.3f}")
+    
+    # Find corresponding ONNX file
+    pkl_basename = os.path.splitext(pkl_file)[0]
+    onnx_file = f"{pkl_basename}.onnx"
+    
+    if not os.path.exists(onnx_file):
+        print(f"ERROR: ONNX file {onnx_file} not found!")
+        print("Available files:", [f for f in os.listdir('.') if f.endswith('.onnx')])
+        return False
+    
+    print(f"Loading ONNX model from: {onnx_file}")
+    
+    # Load ONNX model and calculate predictions using existing function
+    # ONNX model handles normalization internally (input: real data -> output: real data)
+    onnx_session = None
+    try:
+        check(onnx_file, verbose=False)
+        model, onnx_session = read(onnx_file)
+        
+        print(f"Successfully loaded ONNX model (handles normalization internally)")
+        
+        # Calculate predictions using existing infere function with original dimensional data
+        Y_hat_train = []
+        Y_hat_valid = []
+        
+        print(f"Computing training predictions with ONNX...")
+        for i, x_sample in enumerate(X_train):
+            prediction = infere(x_sample, onnx_session)
+            Y_hat_train.append(prediction)
+            if i % 1000 == 0 and i > 0:
+                print(f"  Processed {i}/{len(X_train)} training samples")
+        
+        print(f"Computing validation predictions with ONNX...")
+        for i, x_sample in enumerate(X_valid):
+            prediction = infere(x_sample, onnx_session)
+            Y_hat_valid.append(prediction)
+            if i % 1000 == 0 and i > 0:
+                print(f"  Processed {i}/{len(X_valid)} validation samples")
+        
+        Y_hat_train = np.array(Y_hat_train)
+        Y_hat_valid = np.array(Y_hat_valid)
+        
+        print(f"Successfully calculated ONNX predictions (dimensional values)")
+        print(f"   Training predictions shape: {Y_hat_train.shape}")
+        print(f"   Validation predictions shape: {Y_hat_valid.shape}")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to load ONNX model: {e}")
+        print("Cannot compute SHAP analysis without proper model")
+        return False
+    
+    if onnx_session is None:
+        print("ERROR: ONNX session not initialized properly")
+        return False
+    
+    # Get variable names
+    input_indices = nn["NeuralNetworkModel"]["inputEntryIndices"]
+    input_names = [headers[i] for i in input_indices]
+    output_names = [headers[i] for i in outputIndexEntry]
+    
+    print(f"\nOriginal variable names:")
+    print(f"Input variables: {input_names}")
+    print(f"Output variables: {output_names}")
+    
+    # Helper function to clean LaTeX names for display when LaTeX is disabled
+    def clean_latex_name(name):
+        """Remove LaTeX dollar signs and basic formatting when LaTeX is disabled"""
+        if isinstance(name, str):
+            # Remove dollar signs
+            cleaned = name.replace('$', '')
+            # Basic replacements for common LaTeX constructs (use ASCII)
+            cleaned = cleaned.replace('\\alpha', 'alpha')
+            cleaned = cleaned.replace('\\Delta', 'Delta')
+            cleaned = cleaned.replace('\\text{', '').replace('}', '')
+            cleaned = cleaned.replace('_{', '_').replace('^{', '^')
+            # Remove remaining braces
+            cleaned = cleaned.replace('{', '').replace('}', '')
+            # If result is empty after cleaning, return the cleaned version as is
+            return cleaned if cleaned.strip() else name.replace('$', '')
+        return name
+    
+    # Apply LaTeX formatting if provided
+    if latex_var_names:
+        if isinstance(latex_var_names, dict):
+            # Dictionary mapping: original_name -> latex_name
+            input_names_display = [latex_var_names.get(name, name) for name in input_names]
+            output_names_display = [latex_var_names.get(name, name) for name in output_names]
+        elif isinstance(latex_var_names, list):
+            # List format: check if it matches inputs only or all variables
+            all_names = input_names + output_names
+            if len(latex_var_names) == len(input_names):
+                # List contains only input names
+                input_names_display = latex_var_names
+                output_names_display = output_names
+                print(f"Using LaTeX names for input variables only")
+            elif len(latex_var_names) == len(all_names):
+                # List contains all variable names (inputs + outputs)
+                input_names_display = latex_var_names[:len(input_names)]
+                output_names_display = latex_var_names[len(input_names):]
+                print(f"Using LaTeX names from list (assuming same order)")
+            else:
+                print(f"WARNING: LaTeX list length ({len(latex_var_names)}) doesn't match inputs ({len(input_names)}) or all variables ({len(all_names)})")
+                input_names_display = input_names
+                output_names_display = output_names
+        else:
+            print(f"WARNING: latex_var_names must be dict or list")
+            input_names_display = input_names
+            output_names_display = output_names
+        
+        # Clean LaTeX names for display only when LaTeX rendering is disabled
+        # Since we're using LaTeX rendering, keep the original LaTeX syntax
+        # input_names_display = [clean_latex_name(name) for name in input_names_display]
+        # output_names_display = [clean_latex_name(name) for name in output_names_display]
+    else:
+        input_names_display = input_names
+        output_names_display = output_names
+    
+    print(f"Display names used: {input_names_display + output_names_display}")
+    
+    # Show mapping for user verification
+    if latex_var_names:
+        print(f"\nVariable Name Mapping (Dataset -> Display):")
+        print("-" * 50)
+        for i, (orig, disp) in enumerate(zip(input_names, input_names_display)):
+            print(f"  Input {i+1:2d}: {orig:15} -> {disp}")
+        for i, (orig, disp) in enumerate(zip(output_names, output_names_display)):
+            print(f"  Output{i+1:2d}: {orig:15} -> {disp}")
+        print("-" * 50)
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Generate all visualizations
-    print(f"\nGenerating comprehensive visualizations...")
+    print(f"\nDataset Information:")
+    print(f"Training samples: {X_train.shape[0]:,}")
+    print(f"Validation samples: {X_valid.shape[0]:,}")
+    print(f"Input features: {len(input_names)}")
+    print(f"Output variables: {len(output_names)}")
+    print(f"Training epochs: {len(loss_history):,}")
     
-    create_architecture_diagram(nn, output_dir)
-    create_training_analysis(loss_history, output_dir)
-    create_prediction_analysis(Y_train, Y_hat_train, Y_valid, Y_hat_valid, 
-                             output_names, accuracy_per_variable, output_dir)
-    create_error_analysis(Y_train, Y_hat_train, Y_valid, Y_hat_valid, 
-                         output_names, output_dir)
-    create_performance_summary(accuracy_per_variable, output_names, 
-                             loss_history, nn, output_dir)
+    # Debug: Compare ONNX predictions with original dimensional data
+    print(f"\nDimensional Data Analysis:")
+    print(f"Input data ranges:")
+    for i, name in enumerate(input_names):
+        x_min, x_max = np.min(X_train[:, i]), np.max(X_train[:, i])
+        x_std = np.std(X_train[:, i])
+        print(f"  {name:20}: [{x_min:10.4f}, {x_max:10.4f}], std={x_std:10.4f}")
     
-    print(f"\nVisualization complete! All plots saved in '{output_dir}/' directory")
-    print(f"Generated files:")
-    print(f"   - network_architecture.png")
-    print(f"   - training_analysis.png") 
-    print(f"   - prediction_analysis.png")
-    print(f"   - error_analysis.png")
-    print(f"   - performance_summary.png")
+    print(f"\nOutput data ranges:")
+    for i, name in enumerate(output_names):
+        y_min, y_max = np.min(Y_train[:, i]), np.max(Y_train[:, i])
+        y_std = np.std(Y_train[:, i])
+        print(f"  {name:20}: [{y_min:10.4f}, {y_max:10.4f}], std={y_std:10.4f}")
+    
+    
+    print(f"\nOutput comparison (Original vs ONNX predictions):")
+    for i, name in enumerate(output_names):
+        orig_min, orig_max = np.min(Y_train[:, i]), np.max(Y_train[:, i])
+        pred_min, pred_max = np.min(Y_hat_train[:, i]), np.max(Y_hat_train[:, i])
+        orig_std = np.std(Y_train[:, i])
+        pred_std = np.std(Y_hat_train[:, i])
+        
+        print(f"  {name:20}:")
+        print(f"    Original: [{orig_min:10.4f}, {orig_max:10.4f}], std={orig_std:10.4f}")
+        print(f"    ONNX Pred:[{pred_min:10.4f}, {pred_max:10.4f}], std={pred_std:10.4f}")
+        
+        if pred_std < 1e-6:
+            print(f"    WARNING: ONNX predictions are nearly constant!")
+        else:
+            # Calculate correlation between original and predicted
+            correlation = np.corrcoef(Y_train[:, i], Y_hat_train[:, i])[0, 1]
+            print(f"    Correlation: {correlation:.4f}")
+    
+    # Generate the two essential scientific plots
+    print(f"\n")
+    
+    # 1. Training Error History Plot
+    create_training_convergence_plot(loss_history, output_dir)
+    
+    # 2. SHAP Analysis Plot (using ONNX model predictions for explainability)
+    create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid, 
+                             input_names, output_names, output_dir, onnx_session,
+                             input_names_display, output_names_display)
+    
+    print(f"\nVisualization complete! Files saved in '{output_dir}/' directory:")
+    print(f"   - training_convergence.png (Training error history)")
+    print(f"   - shap_analysis_[output].png (SHAP beeswarm plots)")
+    print(f"   - shap_importance_[output].png (SHAP feature importance)")
+    print(f"   - training_convergence_data.txt (Training data)")
     
     return True
 
 
-def create_architecture_diagram(nn, output_dir):
-    """Create neural network architecture visualization."""
+def create_training_convergence_plot(loss_history, output_dir):
+    """
+    Create publication-quality training convergence plot showing error history.
+    No textboxes - all statistics printed to console.
+    """
     
-    fig, ax = plt.subplots(figsize=(14, 8))
+    # Set scientific publication parameters with Computer Modern for math only
+    plt.rcParams.update({
+        'text.usetex': False,  # Disable full LaTeX to avoid tight_layout errors
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',  # Use Computer Modern for math text only
+        'font.size': 18,
+        'axes.linewidth': 1.5,
+        'axes.labelsize': 14,
+        'axes.titlesize': 18,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 22,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.facecolor': 'white',
+        'axes.grid': True,
+        'grid.alpha': 0.3,
+        'axes.axisbelow': True
+    })
     
-    # Extract layer information
-    layers = []
-    layer_names = []
-    
-    # Get input dimension
-    input_dim = nn["NeuralNetworkModel"]["inputEntryIndices"]
-    layers.append(len(input_dim))
-    layer_names.append("Input")
-    
-    # Get hidden layers
-    network_layers = dict(islice(nn.items(), 1, None))
-    for layer_name, layer_info in network_layers.items():
-        if "Layer" in layer_name and layer_name != "OutputLayer":
-            layers.append(layer_info["output_dim"])
-            layer_names.append(layer_name.replace("Layer", ""))
-    
-    # Get output layer
-    output_dim = nn["NeuralNetworkModel"]["outputEntryIndices"] 
-    layers.append(len(output_dim))
-    layer_names.append("Output")
-    
-    # Calculate positions
-    n_layers = len(layers)
-    max_neurons = max(layers)
-    
-    # Plot network architecture
-    layer_colors = plt.cm.viridis(np.linspace(0, 1, n_layers))
-    
-    for i, (n_neurons, color) in enumerate(zip(layers, layer_colors)):
-        x = i * 2.5
-        
-        # Draw main neurons
-        y_positions = np.linspace(-max_neurons/2, max_neurons/2, n_neurons)
-        
-        for j, y in enumerate(y_positions):
-            circle = plt.Circle((x, y), 0.3, color=color, alpha=0.7)
-            ax.add_patch(circle)
-        
-        # Add bias neuron for hidden layers (not input or output)
-        if i > 0 and i < n_layers - 1:
-            bias_y = max_neurons/2 + 1.5
-            bias_circle = plt.Circle((x, bias_y), 0.2, color='orange', alpha=0.8)
-            ax.add_patch(bias_circle)
-            ax.text(x, bias_y, 'b', ha='center', va='center', fontsize=8, fontweight='bold', color='white')
-            
-        # Draw connections to next layer
-        if i < n_layers - 1:
-            next_neurons = layers[i + 1]
-            next_y_positions = np.linspace(-max_neurons/2, max_neurons/2, next_neurons)
-            
-            # Connections from main neurons
-            for y1 in y_positions:
-                for y2 in next_y_positions:
-                    ax.plot([x + 0.3, x + 2.5 - 0.3], [y1, y2], 
-                           'k-', alpha=0.1, linewidth=0.5)
-            
-            # Connections from bias neuron (if exists)
-            if i > 0 and i < n_layers - 1:
-                bias_y = max_neurons/2 + 1.5
-                for y2 in next_y_positions:
-                    ax.plot([x + 0.2, x + 2.5 - 0.3], [bias_y, y2], 
-                           'orange', alpha=0.3, linewidth=0.3)
-        
-        # Add layer labels
-        ax.text(x, -max_neurons/2 - 1, f"{layer_names[i]}\n({n_neurons})", 
-               ha='center', va='top', fontsize=10, fontweight='bold')
-    
-    # Format plot
-    ax.set_xlim(-1, (n_layers-1) * 2.5 + 1)
-    ax.set_ylim(-max_neurons/2 - 3, max_neurons/2 + 3)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    ax.set_title('Neural Network Architecture', fontsize=16, fontweight='bold', pad=20)
-    
-    # Add architecture summary in bottom right
-    total_params = sum(layer_info.get("output_dim", 0) * (prev_dim + 1) # +1 for bias
-                      for i, (layer_name, layer_info) in enumerate(network_layers.items())
-                      for prev_dim in [layers[i]] if "Layer" in layer_name)
-    
-    arch_text = f"Architecture: {' → '.join(map(str, layers))}\n"
-    arch_text += f"Parameters: ~{total_params:,}\n"
-    arch_text += f"Activations: {', '.join(set(layer['activation'] for layer in network_layers.values()))}\n"
-    arch_text += f"Orange circles: Bias neurons"
-    
-    ax.text(0.98, 0.02, arch_text, transform=ax.transAxes, fontsize=9,
-           verticalalignment='bottom', horizontalalignment='right',
-           bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/network_architecture.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def create_training_analysis(loss_history, output_dir):
-    """Create training loss analysis - log scale only."""
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 7))
     
     epochs = np.arange(1, len(loss_history) + 1)
     
-    # Loss curve in log scale only
-    ax.semilogy(epochs, loss_history, color='#2E86C1', linewidth=2, alpha=0.8)
-    ax.set_xlabel('Epochs', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.set_title('Training Loss Evolution', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+    # Calculate and plot only smoothed trend line
+    if len(loss_history) > 50:
+        window_length = min(51, len(loss_history) // 15)
+        if window_length % 2 == 0:
+            window_length += 1
+        if window_length >= 3:
+            smoothed = signal.savgol_filter(loss_history, window_length, 3)
+        else:
+            smoothed = loss_history
+    else:
+        smoothed = loss_history
     
-    # Professional styling
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_linewidth(0.5)
-    ax.spines['bottom'].set_linewidth(0.5)
-    ax.tick_params(axis='both', which='major', labelsize=10)
+    # Plot only smoothed version with bold black line
+    ax.semilogy(epochs, smoothed, color='black', linewidth=3.0, alpha=0.9)
     
-    # Add key statistics as text annotation
+    # Scientific formatting
+    ax.set_xlabel('Training Epoch', fontweight='bold')
+    ax.set_ylabel('Loss Function Value', fontweight='bold')
+    ax.set_title('Neural Network Training Convergence', fontweight='bold', pad=20)
+    
+    # Professional appearance
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.5)
+        spine.set_color('#333333')
+    
+    ax.tick_params(axis='both', which='major', width=1.5, length=6)
+    ax.tick_params(axis='both', which='minor', width=1.0, length=3)
+    
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/training_convergence.png", dpi=300, 
+                bbox_inches='tight', facecolor='white')
+    plt.savefig(f"{output_dir}/training_convergence.pdf", 
+                bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    # Calculate and print comprehensive statistics to console
     final_loss = loss_history[-1]
     initial_loss = loss_history[0]
     min_loss = min(loss_history)
     min_epoch = np.argmin(loss_history) + 1
     
-    stats_text = f"Initial: {initial_loss:.2e}\n"
-    stats_text += f"Final: {final_loss:.2e}\n"
-    stats_text += f"Best: {min_loss:.2e} (Epoch {min_epoch})\n"
-    stats_text += f"Improvement: {((initial_loss - final_loss) / initial_loss * 100):.1f}%"
+    # Convergence analysis
+    last_10pct = max(1, int(len(loss_history) * 0.1))
+    convergence_variance = np.var(loss_history[-last_10pct:])
+    improvement_ratio = (initial_loss - final_loss) / initial_loss * 100
+    loss_gradient = np.gradient(loss_history)
+    avg_learning_rate = np.mean(np.abs(loss_gradient))
     
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-            verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.7))
+    print(f"\n" + "="*70)
+    print(f"TRAINING CONVERGENCE ANALYSIS")
+    print(f"="*70)
+    print(f"Initial Loss:              {initial_loss:.8e}")
+    print(f"Final Loss:                {final_loss:.8e}")
+    print(f"Minimum Loss Achieved:     {min_loss:.8e}")
+    print(f"Best Loss at Epoch:        {min_epoch:,}")
+    print(f"Total Training Epochs:     {len(loss_history):,}")
+    print(f"Loss Reduction:            {improvement_ratio:.3f}%")
+    print(f"Convergence Variance:      {convergence_variance:.8e}")
+    print(f"Average Learning Rate:     {avg_learning_rate:.8e}")
+    print(f"Loss Stability (last 10%): {np.std(loss_history[-last_10pct:]):.8e}")
     
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/training_analysis.png", dpi=300, bbox_inches='tight',
-               facecolor='white', edgecolor='none')
-    plt.close()
-
-
-def create_prediction_analysis(Y_train, Y_hat_train, Y_valid, Y_hat_valid, 
-                             output_names, accuracy_per_variable, output_dir):
-    """Create prediction vs actual value analysis with Q1 publication quality."""
+    # Convergence assessment
+    is_converged = convergence_variance < final_loss * 0.001
+    print(f"Convergence Status:        {'CONVERGED' if is_converged else 'STILL LEARNING'}")
+    print(f"="*70)
     
-    # High-quality color palette for publications (colorblind-friendly)
-    colors = {
-        'training': '#1f77b4',      # Professional blue
-        'validation': '#ff7f0e',    # Professional orange  
-        'perfect': '#2c2c2c',       # Dark gray
-        'error_band': '#d62728'     # Professional red
-    }
-    
-    n_outputs = len(output_names)
-    n_cols = min(3, n_outputs)
-    n_rows = (n_outputs + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows))
-    if n_outputs == 1:
-        axes = [axes]
-    elif n_rows == 1:
-        axes = axes.reshape(1, -1)
-    
-    for i, (output_name, r2_score) in enumerate(zip(output_names, accuracy_per_variable)):
-        row, col = i // n_cols, i % n_cols
-        ax = axes[row, col] if n_rows > 1 else axes[col]
+    # Generate data file with training history
+    with open(f"{output_dir}/training_convergence_data.txt", 'w') as f:
+        f.write("Epoch\tLoss_Value\tSmoothed_Trend\n")
         
-        # Plot training data with high-quality styling
-        ax.scatter(Y_train[:, i], Y_hat_train[:, i], alpha=0.7, s=15, 
-                  label='Training', color=colors['training'], edgecolors='none')
-        
-        # Plot validation data
-        ax.scatter(Y_valid[:, i], Y_hat_valid[:, i], alpha=0.7, s=15, 
-                  label='Validation', color=colors['validation'], edgecolors='none')
-        
-        # Perfect prediction line
-        ax.plot([0, 1], [0, 1], color=colors['perfect'], linestyle='--', 
-               linewidth=1.5, alpha=0.8, label='Perfect Prediction')
-        
-        # ±5% error bands
-        x_band = np.linspace(0, 1, 100)
-        ax.fill_between(x_band, x_band - 0.05, x_band + 0.05, 
-                       alpha=0.15, color=colors['error_band'], label='±5% Error')
-        
-        # Set limits to [0, 1] for normalized data
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        
-        ax.set_xlabel(f'Actual {output_name}', fontsize=10)
-        ax.set_ylabel(f'Predicted {output_name}', fontsize=10)
-        ax.set_title(f'{output_name} (R² = {r2_score:.3f})', fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8, frameon=True, fancybox=True, shadow=True)
-        ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
-        
-        # Set equal aspect ratio and professional styling
-        ax.set_aspect('equal', adjustable='box')
-        ax.tick_params(axis='both', which='major', labelsize=9)
-        
-        # Add professional spines
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_linewidth(0.5)
-        ax.spines['bottom'].set_linewidth(0.5)
-    
-    # Hide empty subplots
-    for i in range(n_outputs, n_rows * n_cols):
-        row, col = i // n_cols, i % n_cols
-        ax = axes[row, col] if n_rows > 1 else axes[col]
-        ax.axis('off')
-    
-    # No main title for publication quality
-    plt.tight_layout(pad=2.0)
-    plt.savefig(f"{output_dir}/prediction_analysis.png", dpi=300, bbox_inches='tight', 
-               facecolor='white', edgecolor='none')
-    plt.close()
-
-
-def create_error_analysis(Y_train, Y_hat_train, Y_valid, Y_hat_valid, output_names, output_dir):
-    """Create error distribution and residual analysis."""
-    
-    n_outputs = len(output_names)
-    fig = plt.figure(figsize=(12, 4*n_outputs))
-    gs = GridSpec(n_outputs, 3, figure=fig)
-    
-    for i, output_name in enumerate(output_names):
-        # Calculate residuals (difference between predicted and actual)
-        train_residuals = Y_hat_train[:, i] - Y_train[:, i]
-        valid_residuals = Y_hat_valid[:, i] - Y_valid[:, i]
-        
-        # Calculate percentage errors (avoid division by zero)
-        train_pct_errors = 100 * train_residuals / np.where(np.abs(Y_train[:, i]) > 1e-8, Y_train[:, i], 1e-8)
-        valid_pct_errors = 100 * valid_residuals / np.where(np.abs(Y_valid[:, i]) > 1e-8, Y_valid[:, i], 1e-8)
-        
-        # Remove extreme outliers for better visualization
-        train_pct_errors = np.clip(train_pct_errors, -200, 200)
-        valid_pct_errors = np.clip(valid_pct_errors, -200, 200)
-        
-        # 1. Residuals vs Actual (Residuals = difference between predicted and actual values)
-        ax1 = fig.add_subplot(gs[i, 0])
-        ax1.scatter(Y_train[:, i], train_residuals, alpha=0.6, s=15, label='Training', color='blue')
-        ax1.scatter(Y_valid[:, i], valid_residuals, alpha=0.6, s=15, label='Validation', color='red')
-        ax1.axhline(y=0, color='k', linestyle='--', alpha=0.8)
-        ax1.set_xlabel(f'Actual {output_name}')
-        ax1.set_ylabel('Residuals (Predicted - Actual)')
-        ax1.set_title(f'Residuals vs Actual Values')
-        ax1.legend(fontsize=8)
-        ax1.grid(True, alpha=0.3)
-        
-        # 2. Residual distribution (should be centered around 0 for good model)
-        ax2 = fig.add_subplot(gs[i, 1])
-        ax2.hist(train_residuals, bins=30, alpha=0.7, label='Training', color='blue', density=True)
-        ax2.hist(valid_residuals, bins=30, alpha=0.7, label='Validation', color='red', density=True)
-        ax2.axvline(x=0, color='k', linestyle='--', alpha=0.8)
-        ax2.set_xlabel('Residuals (Predicted - Actual)')
-        ax2.set_ylabel('Density')
-        ax2.set_title('Residual Distribution')
-        ax2.legend(fontsize=8)
-        ax2.grid(True, alpha=0.3)
-        
-        # 3. Percentage errors distribution
-        ax3 = fig.add_subplot(gs[i, 2])
-        if len(train_pct_errors) > 0 and len(valid_pct_errors) > 0:
-            ax3.hist(train_pct_errors, bins=30, alpha=0.7, label='Training', color='blue', density=True)
-            ax3.hist(valid_pct_errors, bins=30, alpha=0.7, label='Validation', color='red', density=True)
-            ax3.axvline(x=0, color='k', linestyle='--', alpha=0.8)
-            ax3.set_xlabel('Relative Errors (%)')
-            ax3.set_ylabel('Density')
-            ax3.set_title('Relative Error Distribution')
-            ax3.legend(fontsize=8)
-            ax3.grid(True, alpha=0.3)
-        else:
-            ax3.text(0.5, 0.5, 'No valid percentage\nerrors to display', 
-                    ha='center', va='center', transform=ax3.transAxes)
-            ax3.set_title('Relative Error Distribution')
-    
-    plt.suptitle('Error Analysis', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/error_analysis.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def create_performance_summary(accuracy_per_variable, output_names, loss_history, nn, output_dir):
-    """Create overall performance summary dashboard."""
-    
-    fig = plt.figure(figsize=(16, 10))
-    gs = GridSpec(3, 3, figure=fig, height_ratios=[1, 1, 1], width_ratios=[1, 1, 1])
-    
-    # 1. R² Scores Bar Chart
-    ax1 = fig.add_subplot(gs[0, :2])
-    colors = plt.cm.viridis(np.linspace(0, 1, len(output_names)))
-    bars = ax1.bar(output_names, accuracy_per_variable, color=colors, alpha=0.8)
-    ax1.set_ylabel('R² Score')
-    ax1.set_title('Model Performance by Output Variable', fontweight='bold')
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.set_ylim(0, max(1.0, max(accuracy_per_variable) * 1.1))
-    
-    # Add value labels on bars
-    for bar, score in zip(bars, accuracy_per_variable):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{score:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    # 2. Performance Classification
-    ax2 = fig.add_subplot(gs[0, 2])
-    
-    # Classify performance
-    excellent = sum(1 for r2 in accuracy_per_variable if r2 >= 0.95)
-    good = sum(1 for r2 in accuracy_per_variable if 0.85 <= r2 < 0.95)
-    fair = sum(1 for r2 in accuracy_per_variable if 0.70 <= r2 < 0.85)
-    poor = sum(1 for r2 in accuracy_per_variable if r2 < 0.70)
-    
-    performance_counts = [excellent, good, fair, poor]
-    performance_labels = ['Excellent\n(R²≥0.95)', 'Good\n(0.85≤R²<0.95)', 
-                         'Fair\n(0.70≤R²<0.85)', 'Poor\n(R²<0.70)']
-    performance_colors = ['green', 'lightgreen', 'orange', 'red']
-    
-    # Filter out zero counts
-    non_zero_counts = [(count, label, color) for count, label, color in 
-                      zip(performance_counts, performance_labels, performance_colors) if count > 0]
-    
-    if non_zero_counts:
-        counts, labels, colors = zip(*non_zero_counts)
-        wedges, texts, autotexts = ax2.pie(counts, labels=labels, colors=colors, autopct='%1.0f',
-                                          startangle=90, textprops={'fontsize': 8})
-    
-    ax2.set_title('Performance Classification', fontweight='bold')
-    
-    # 3. Training Summary
-    ax3 = fig.add_subplot(gs[1, :])
-    ax3.axis('off')
-    
-    # Model summary
-    avg_r2 = np.mean(accuracy_per_variable)
-    best_r2 = max(accuracy_per_variable)
-    worst_r2 = min(accuracy_per_variable)
-    best_var = output_names[np.argmax(accuracy_per_variable)]
-    worst_var = output_names[np.argmin(accuracy_per_variable)]
-    
-    summary_text = f"MODEL PERFORMANCE SUMMARY\n"
-    summary_text += f"{'='*50}\n\n"
-    summary_text += f"Overall Performance:\n"
-    summary_text += f"  • Average R² Score: {avg_r2:.3f}\n"
-    summary_text += f"  • Best Performance: {best_r2:.3f} ({best_var})\n"
-    summary_text += f"  • Worst Performance: {worst_r2:.3f} ({worst_var})\n"
-    summary_text += f"  • Performance Range: {best_r2 - worst_r2:.3f}\n\n"
-    
-    summary_text += f"Training Details:\n"
-    summary_text += f"  • Total Epochs: {len(loss_history):,}\n"
-    if loss_history:
-        summary_text += f"  • Final Loss: {loss_history[-1]:.2e}\n"
-        summary_text += f"  • Loss Reduction: {((loss_history[0] - loss_history[-1]) / loss_history[0] * 100):.1f}%\n"
-    summary_text += f"  • Optimizer: {nn['NeuralNetworkModel'].get('UpdateMethod', 'Adam')}\n"
-    summary_text += f"  • Learning Rate: {nn['NeuralNetworkModel'].get('learning_rate', 'N/A')}\n\n"
-    
-    # Performance recommendations
-    if avg_r2 >= 0.90:
-        recommendation = "EXCELLENT: Model shows excellent predictive performance across all outputs."
-    elif avg_r2 >= 0.80:
-        recommendation = "GOOD: Model shows good performance. Consider fine-tuning for better results."
-    elif avg_r2 >= 0.70:
-        recommendation = "FAIR: Model shows acceptable performance. Architecture optimization recommended."
-    else:
-        recommendation = "POOR: Model performance is below acceptable threshold. Redesign needed."
-    
-    summary_text += f"Recommendation: {recommendation}"
-    
-    ax3.text(0.05, 0.95, summary_text, transform=ax3.transAxes, fontsize=11,
-            verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="lightcyan", alpha=0.8))
-    
-    # 4. Individual Variable Performance
-    ax4 = fig.add_subplot(gs[2, :])
-    
-    # Create detailed performance table
-    var_data = []
-    for i, (name, r2) in enumerate(zip(output_names, accuracy_per_variable)):
-        if r2 >= 0.95:
-            status = "Excellent"
-        elif r2 >= 0.85:
-            status = "Good"  
-        elif r2 >= 0.70:
-            status = "Fair"
-        else:
-            status = "Poor"
-        var_data.append([name, f"{r2:.4f}", status])
-    
-    # Create table
-    table = ax4.table(cellText=var_data,
-                     colLabels=['Output Variable', 'R² Score', 'Performance'],
-                     cellLoc='center',
-                     loc='upper center',
-                     colWidths=[0.3, 0.2, 0.3])
-    
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 1.5)
-    
-    # Style the table
-    for i in range(len(output_names) + 1):
-        for j in range(3):
-            if i == 0:  # Header
-                table[(i, j)].set_facecolor('#4CAF50')
-                table[(i, j)].set_text_props(weight='bold', color='white')
+        # Calculate smoothed values for data file
+        if len(loss_history) > 50:
+            window_length = min(51, len(loss_history) // 15)
+            if window_length % 2 == 0:
+                window_length += 1
+            if window_length >= 3:
+                smoothed = signal.savgol_filter(loss_history, window_length, 3)
             else:
-                if j == 1:  # R² score column
-                    r2_val = accuracy_per_variable[i-1]
-                    if r2_val >= 0.95:
-                        table[(i, j)].set_facecolor('#E8F5E8')
-                    elif r2_val >= 0.85:
-                        table[(i, j)].set_facecolor('#FFF8DC')
-                    elif r2_val >= 0.70:
-                        table[(i, j)].set_facecolor('#FFE4B5')
-                    else:
-                        table[(i, j)].set_facecolor('#FFE4E1')
-    
-    ax4.axis('off')
-    ax4.set_title('Detailed Performance by Variable', fontweight='bold', pad=5, y=0.9)
-    
-    plt.suptitle('Neural Network Performance Dashboard', fontsize=18, fontweight='bold', y=0.98)
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/performance_summary.png", dpi=300, bbox_inches='tight')
-    plt.close()
+                smoothed = loss_history
+        else:
+            smoothed = loss_history
+            
+        for i, (loss, smooth) in enumerate(zip(loss_history, smoothed), 1):
+            f.write(f"{i}\t{loss:.10e}\t{smooth:.10e}\n")
 
 
-if __name__ == "__main__":
-    import sys
+def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid, 
+                             input_names, output_names, output_dir, onnx_session,
+                             input_names_display, output_names_display):
+    """
+    Create SHAP (SHapley Additive exPlanations) analysis plots for neural network explanability.
     
-    print("Neural Network Visualization Tool")
-    print("=" * 40)
+    SHAP values explain the contribution of each feature to individual predictions,
+    providing model-agnostic explanations for the neural network's decisions.
     
-    if len(sys.argv) > 1:
-        # PKL file provided as argument
-        pkl_file = sys.argv[1]
-        output_dir = sys.argv[2] if len(sys.argv) > 2 else "visualizations"
-        visualize_NN_results(pkl_file, output_dir)
-    else:
-        # Use most recent PKL file
-        visualize_NN_results()
+    Parameters:
+    -----------
+    onnx_session : ONNX runtime session for model predictions
+    """
+    
+    print(f"\nGenerating SHAP explanations for model interpretability...")
+    
+    # Create cache filename based on ONNX model and data
+    import hashlib
+    import time
+    
+    # Create combined data for cache key generation
+    X_combined_temp = np.vstack([X_train, X_valid])
+    Y_combined_temp = np.vstack([Y_train, Y_valid])
+    
+    # Use ONNX file timestamp and combined data shape for cache key
+    onnx_mtime = os.path.getmtime(os.path.join(os.getcwd(), 
+        [f for f in os.listdir('.') if f.startswith('Trained_DNN_') and f.endswith('.onnx')][0]))
+    cache_key = f"{X_combined_temp.shape}_{Y_combined_temp.shape}_{onnx_mtime}"
+    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+    cache_file = os.path.join(output_dir, f"shap_cache_{cache_hash}.pkl")
+    
+    # Try to load cached SHAP values
+    shap_values = None
+    X_sample = None
+    
+    if os.path.exists(cache_file):
+        try:
+            print(f"Loading cached SHAP analysis from {cache_file}...")
+            with open(cache_file, 'rb') as f:
+                cached_data = pickle.load(f)
+                shap_values = cached_data['shap_values']
+                X_sample = cached_data['X_sample']
+                n_cached_samples = len(X_sample) if X_sample is not None else 0
+            print(f"\n{'='*60}")
+            print(f"🔄 CACHE FOUND!")
+            print(f"Using previously computed SHAP values for {n_cached_samples} samples.")
+            print(f"This will skip the interactive sample selection process.")
+            print(f"{'='*60}\n")
+            input("⚡ Press ENTER to continue with cached data...")
+        except Exception as e:
+            print(f"Failed to load cache: {e}. Computing fresh SHAP analysis...")
+            shap_values = None
+    
+    # Compute SHAP values if not cached
+    if shap_values is None:
+        # Set publication parameters with Computer Modern for math only
+        plt.rcParams.update({
+            'text.usetex': False,  # Disable full LaTeX to avoid tight_layout errors
+            'font.family': 'serif',
+            'mathtext.fontset': 'cm',  # Use Computer Modern for math text only
+            'font.size': 18,
+            'axes.linewidth': 1.5,
+            'axes.labelsize': 14,
+            'axes.titlesize': 16,
+            'xtick.labelsize': 12,
+            'ytick.labelsize': 12,
+            'legend.fontsize': 22,
+            'figure.dpi': 300,
+            'savefig.dpi': 300,
+            'savefig.bbox': 'tight',
+            'savefig.facecolor': 'white'
+        })
+        
+        # Create wrapper function for ONNX model
+        def onnx_predict(X):
+            """Wrapper function for ONNX predictions compatible with SHAP"""
+            predictions = []
+            for x_sample in X:
+                pred = infere(x_sample, onnx_session)
+                predictions.append(pred)
+            return np.array(predictions)
+        
+        # Combine train and test data for SHAP analysis
+        X_combined = np.vstack([X_train, X_valid])
+        Y_combined = np.vstack([Y_train, Y_valid])
+        
+        # Interactive sample size selection
+        max_samples = len(X_combined)
+        print(f"Total available samples (train + test): {max_samples:,}")
+        
+        try:
+            user_input = input(f"Enter number of samples for SHAP analysis (0-{max_samples}): ")
+            n_samples = int(float(user_input))  # Convert to float first to handle decimals, then to int
+            
+            # Validate and clamp the input
+            if n_samples < 0:
+                n_samples = 0
+            elif n_samples > max_samples:
+                n_samples = max_samples
+                
+            print(f"Using {n_samples} samples for SHAP analysis")
+            
+        except (ValueError, KeyboardInterrupt):
+            # Default fallback if input is invalid or user cancels
+            n_samples = min(500, max_samples)
+            print(f"Invalid input or cancelled. Using default: {n_samples} samples")
+        
+        X_sample = X_combined[:n_samples]
+        
+        print(f"Computing SHAP values for {n_samples} samples (this may take a few minutes)...")
+        start_time = time.time()
+        
+        # Initialize SHAP explainer with background data (use min of 100 or n_samples)
+        n_background = min(100, n_samples)
+        explainer = shap.Explainer(onnx_predict, X_sample[:n_background])
+        
+        # Calculate SHAP values for all selected samples (use min of 200 or n_samples)
+        n_explain = min(200, n_samples)
+        shap_values = explainer(X_sample[:n_explain])
+        
+        elapsed_time = time.time() - start_time
+        print(f"SHAP analysis complete in {elapsed_time:.1f} seconds!")
+        
+        # Cache the results for future use
+        try:
+            cached_data = {
+                'shap_values': shap_values,
+                'X_sample': X_sample,
+                'n_samples_used': n_samples,
+                'computation_time': elapsed_time,
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cached_data, f)
+            print(f"SHAP results cached to {cache_file}")
+        except Exception as e:
+            print(f"Failed to save cache: {e}")
+    
+    # Set publication parameters with Computer Modern for math only
+    plt.rcParams.update({
+        'text.usetex': False,  # Disable full LaTeX to avoid tight_layout errors
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',  # Use Computer Modern for math text only
+        'font.size': 18,
+        'axes.linewidth': 1.5,
+        'axes.labelsize': 14,
+        'axes.titlesize': 16,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 22,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.facecolor': 'white'
+    })
+    
+    # Create summary plots for each output
+    for output_idx, output_name in enumerate(output_names):
+        # Extract SHAP values for this output
+        if len(shap_values.values.shape) == 3:
+            shap_vals = shap_values.values[:, :, output_idx]
+        else:
+            shap_vals = shap_values.values
+        
+        # Create combined SHAP plot with analysis on left and importance on right
+        # Use rectangular figure with wider proportions and custom subplot widths
+        fig = plt.figure(figsize=(20, 8))
+        
+        # Create custom grid: left plot wider than right plot
+        gs = fig.add_gridspec(1, 3, width_ratios=[2.5, 1.2, 0.1])
+        
+        # Left plot: SHAP beeswarm analysis (takes 2.5 parts of width)
+        ax1 = fig.add_subplot(gs[0, 0])
+        plt.sca(ax1)
+        
+        # Create SHAP beeswarm plot without automatic colorbar with larger font and medium dots
+        n_plot_samples = min(len(X_sample), shap_vals.shape[0])
+        shap.plots.beeswarm(shap.Explanation(
+            values=shap_vals,
+            data=X_sample[:n_plot_samples],
+            feature_names=input_names_display,
+        ), show=False, plot_size=(15, 8), color_bar=False, s=35)
+        
+        # Increase font sizes for the left plot
+        ax1.tick_params(axis='both', which='major', labelsize=16)  # Increase tick label size
+        ax1.tick_params(axis='x', which='major', labelsize=16)     # X-axis tick labels
+        ax1.tick_params(axis='y', which='major', labelsize=20)     # Y-axis tick labels (LaTeX feature names) - increased further
+        
+        # Increase axis label sizes
+        ax1.set_xlabel(ax1.get_xlabel(), fontsize=18, fontweight='bold')
+        if ax1.get_ylabel():
+            ax1.set_ylabel(ax1.get_ylabel(), fontsize=18, fontweight='bold')
+        
+        # Change the vertical zero line from gray to black
+        ax1.axvline(x=0, color='black', linewidth=1.5, alpha=0.8)
+        
+        # Get the y-axis limits and tick positions from the left plot for alignment
+        left_ylim = ax1.get_ylim()
+        left_yticks = ax1.get_yticks()
+        
+        # Force remove any colorbars that might have been created
+        # Get all axes in the figure and remove narrow ones (likely colorbars)
+        current_axes = fig.get_axes().copy()
+        for ax in current_axes:
+            if ax != ax1:  # Don't remove our main plot
+                try:
+                    pos = ax.get_position()
+                    # Remove if it's narrow (likely a colorbar) or specifically labeled as colorbar
+                    if pos.width < 0.1 or 'colorbar' in str(ax).lower():
+                        ax.remove()
+                except:
+                    pass
+        
+        # Right plot: Feature importance with matching colors (takes 1.2 parts of width)
+        ax2 = fig.add_subplot(gs[0, 1])
+        plt.sca(ax2)
+        
+        # Calculate mean absolute SHAP values for feature importance
+        mean_shap = np.mean(np.abs(shap_vals), axis=0)
+        
+        # Sort features by importance (same order as beeswarm plot)
+        sorted_indices = np.argsort(mean_shap)
+        sorted_names_display = [input_names_display[i] for i in sorted_indices]
+        sorted_importance = mean_shap[sorted_indices]
+        
+        # GROUPING MANAGEMENT: Check if SHAP grouped features in the left plot
+        # Extract y-labels from left SHAP plot to see if there are groupings
+        left_labels = [label.get_text() for label in ax1.get_yticklabels()]
+        
+        # Search for "Sum of X other features" pattern or similar
+        grouped_features_count = 0
+        grouped_pattern_found = False
+        for label in left_labels:
+            if "Sum of" in label and "other" in label:
+                # Extract number of grouped features (e.g., "Sum of 4 other features")
+                import re
+                match = re.search(r'Sum of (\d+) other', label)
+                if match:
+                    grouped_features_count = int(match.group(1))
+                    grouped_pattern_found = True
+                    break
+        
+        # If SHAP grouped features, adapt the right plot accordingly
+        if grouped_pattern_found and grouped_features_count > 0:
+            print(f"[SHAP GROUPING] Detected {grouped_features_count} features grouped in left plot")
+            
+            # Group the last N features (those with lower importance)
+            if len(sorted_importance) > grouped_features_count:
+                # Separate individual features from features to be grouped
+                individual_features = len(sorted_importance) - grouped_features_count
+                
+                # Individual features (most important ones)
+                individual_importance = sorted_importance[grouped_features_count:]
+                individual_names = sorted_names_display[grouped_features_count:]
+                
+                # Features to be grouped (least important ones)
+                grouped_importance_values = sorted_importance[:grouped_features_count]
+                grouped_names = sorted_names_display[:grouped_features_count]
+                
+                # Calculate mean importance of grouped features
+                grouped_importance_mean = np.mean(grouped_importance_values)
+                
+                # Create new arrays for plotting
+                final_importance = np.concatenate([[grouped_importance_mean], individual_importance])
+                final_names = [f"Sum of {grouped_features_count} other features"] + individual_names
+                
+                print(f"[GROUPING] Individual features: {len(individual_names)}")
+                print(f"[GROUPING] Grouped features: {grouped_features_count} -> mean importance: {grouped_importance_mean:.6f}")
+            else:
+                # Fallback if too few features
+                final_importance = sorted_importance
+                final_names = sorted_names_display
+        else:
+            # No grouping necessary
+            final_importance = sorted_importance
+            final_names = sorted_names_display
+        
+        # Create custom color gradient: max=#FF0052, center=#9B24AE, min=#008AFB
+        from matplotlib.colors import LinearSegmentedColormap
+        
+        # Define custom colors
+        colors_hex = ['#008AFB', '#9B24AE', '#FF0052']  # min -> center -> max
+        colors_rgb = [tuple(int(c[1:][i:i+2], 16)/255.0 for i in (0, 2, 4)) for c in colors_hex]
+        
+        # Create custom colormap
+        custom_cmap = LinearSegmentedColormap.from_list('custom', colors_rgb, N=256)
+        
+        # Apply colors based on normalized importance (use final_importance)
+        normalized_importance = final_importance / final_importance.max()
+        colors = [custom_cmap(val) for val in normalized_importance]
+        
+        # Create horizontal bar plot with grouped features if necessary
+        bars = plt.barh(range(len(final_names)), final_importance, 
+                       color=colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+        
+        # Remove value labels as requested
+        # Remove y-label as requested
+        plt.xlabel(r'Mean $|$SHAP Value$|$', fontsize=18, fontweight='bold')
+        plt.yticks(range(len(final_names)))  # Use final_names instead of input_names
+        plt.grid(True, alpha=0.3, axis='x')
+        
+        # Remove y-axis labels on the right plot to avoid duplication
+        plt.gca().set_yticklabels([])
+        
+        # Increase tick label sizes to match left plot
+        ax2.tick_params(axis='both', which='major', labelsize=16)  # Match left plot tick size
+        ax2.tick_params(axis='x', which='major', labelsize=16)     # X-axis tick labels
+        
+        # Align the right plot y-axis with the left plot for perfect horizontal alignment
+        # Set the same y-limits and y-tick positions as the left plot
+        ax2.set_ylim(left_ylim)
+        ax2.set_yticks(left_yticks)
+        
+        # Ensure the bars are positioned to align with the left plot's feature positions
+        # The left plot has features at specific y-positions, we need to match those
+        # Get the actual y-positions of features from the left plot
+        left_feature_positions = []
+        for i, txt in enumerate(ax1.get_yticklabels()):
+            if txt.get_text():  # Only non-empty labels
+                left_feature_positions.append(i)
+        
+        # Clear the previous bars and redraw with correct alignment
+        ax2.clear()
+        plt.sca(ax2)
+        
+        # Create horizontal bar plot with positions matching left plot
+        if len(left_feature_positions) == len(final_names):
+            bars = plt.barh(left_feature_positions, final_importance, 
+                           color=colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+            plt.yticks(left_feature_positions)
+        else:
+            y_positions = np.linspace(left_ylim[0], left_ylim[1], len(final_names))
+            bars = plt.barh(y_positions, final_importance, 
+                           color=colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+            plt.yticks(y_positions)
+        
+        # Reapply formatting
+        plt.xlabel(r'Mean $|$SHAP Value$|$', fontsize=18, fontweight='bold')
+        plt.grid(True, alpha=0.3, axis='x')
+        plt.gca().set_yticklabels([])
+        ax2.tick_params(axis='both', which='major', labelsize=16)
+        ax2.tick_params(axis='x', which='major', labelsize=16)
+        
+        # Remove top and right borders, keep only left and bottom
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.spines['left'].set_visible(True)
+        ax2.spines['bottom'].set_visible(True)
+        
+        # Set the same y-limits as left plot for perfect alignment
+        ax2.set_ylim(left_ylim)
+        
+        # Add colorbar on the far right
+        ax3 = fig.add_subplot(gs[0, 2])  # Use the third column for colorbar
+        
+        # Create colorbar using the custom colormap
+        sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=plt.Normalize(vmin=0, vmax=1))
+        sm.set_array([])
+        
+        cbar = plt.colorbar(sm, cax=ax3)
+        cbar.set_label(r'Feature Value', rotation=90, labelpad=20, fontweight='bold', fontsize=18)
+
+        # Set colorbar ticks to show High and Low labels with larger font
+        cbar.set_ticks([0, 1])
+        cbar.set_ticklabels(['Low', 'High'])
+        cbar.ax.tick_params(labelsize=16)  # Increase Low/High font size to match other elements
+        
+        plt.tight_layout()
+        
+        # Save combined SHAP plot in both PNG and PDF formats
+        clean_output_name = output_name.replace('/', '_').replace(' ', '_')
+        plt.savefig(f"{output_dir}/shap_analysis_{clean_output_name}.png", 
+                   dpi=300, bbox_inches='tight', facecolor='white')
+        plt.savefig(f"{output_dir}/shap_analysis_{clean_output_name}.pdf", 
+                   bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        # Print SHAP analysis results - adapted for grouping
+        print(f"\n" + "="*60)
+        print(f"SHAP ANALYSIS RESULTS: {output_name}")
+        print("="*60)
+        print("Feature Importance Rankings (Mean |SHAP Value|):")
+        
+        # Print features in importance order (from right plot)
+        for i, (name, importance) in enumerate(zip(final_names, final_importance)):
+            print(f"{i+1:2d}. {name:30}: {importance:.6f}")
+        
+        # If there are grouped features, also print details
+        if grouped_pattern_found and grouped_features_count > 0:
+            print(f"\nDetailed breakdown of grouped features:")
+            for i, (orig_name, orig_importance) in enumerate(zip(grouped_names, grouped_importance_values)):
+                print(f"    {orig_name:25}: {orig_importance:.6f}")
+            print(f"    → Average of grouped features: {grouped_importance_mean:.6f}")
+        
+    
+    print(f"\n" + "="*80)
+    print(f"SHAP analysis complete! Generated plots:")
+    print(f"   - SHAP summary plots (beeswarm)")
+    print(f"   - SHAP feature importance plots")
+    print(f"   - SHAP data files")
+    print(f"="*80)

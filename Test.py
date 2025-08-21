@@ -5,25 +5,22 @@ from ActivationFunctions import *
 import numpy as np
 
 def validation_fidelity_r2(y_true, y_pred):
+    """Calculate R² validation fidelity score as percentage"""
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     r2 = 1 - (ss_res / ss_tot)
-    return max(0, r2 * 100)  # Impedisce valori negativi
+    return max(0, r2 * 100)  # Prevent negative values
 
 def test(X_valid, Y_valid, params_values, nn, mean_loss, momentum, i, min_data, max_data, outputIndexEntry, training_fidelity, ShowEvery=200, silent_mode=False):
    
     Y_hat, _                = full_forward_propagation(X_valid, params_values, nn)
     accuracy_per_variable   = get_accuracy_value(Y_hat, Y_valid, min_data, max_data, outputIndexEntry)
 
-    # Calculate R² for each output variable individually
-    r2_per_variable = []
-    for j in range(Y_valid.shape[1]):
-        y_true_col = Y_valid[:, j]
-        y_pred_col = Y_hat[:, j]
-        ss_res = np.sum((y_true_col - y_pred_col) ** 2)
-        ss_tot = np.sum((y_true_col - np.mean(y_true_col)) ** 2)
-        r2 = 1 - (ss_res / ss_tot)
-        r2_per_variable.append(max(0, r2 * 100))
+    # VECTORIZED: Calculate R² for all output variables simultaneously
+    ss_res = np.sum((Y_valid - Y_hat) ** 2, axis=0)  # Sum per column (per variable)
+    ss_tot = np.sum((Y_valid - np.mean(Y_valid, axis=0)) ** 2, axis=0)  # Sum per column
+    r2_values = 1 - (ss_res / ss_tot)
+    r2_per_variable = np.maximum(0, r2_values * 100).tolist()  # Converti a lista, evita valori negativi
     
     validation_fidelity     = validation_fidelity_r2(Y_valid, Y_hat)
     

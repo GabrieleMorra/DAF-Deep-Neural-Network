@@ -32,25 +32,4 @@ def full_backward_propagation(Y_hat, Y, memory, params_value, nn, network_layers
 
         dLdA_curr = np.dot(dLdZ_curr, W_curr.T)          
 
-
-    # Tentativo implementazione metodo di Gauss-Newton
-    # e = (Y - Y_hat).reshape(-1, 1).astype(float)
-    # g = np.vstack([
-    #     grads_values["dW1"].reshape(-1, 1),
-    #     grads_values["db1"].reshape(-1, 1),
-    #     grads_values["dW2"].reshape(-1, 1),
-    #     grads_values["db2"].reshape(-1, 1)
-    # ])
-    # Jacobian = np.dot(e, g.T).astype(np.float32)
-    # # Risoluzione del sistema lineare anziché calcolare l'inversa
-    # # Nota: np.linalg.solve risolve l'equazione ax = b. Qui, a = JtJ, b = np.dot(Jacobian.T, e)
-    # JtJ = np.dot(Jacobian.T, Jacobian)
-    # update = np.linalg.solve(JtJ, np.dot(Jacobian.T, e))
-    # len_0, len_1, len_2 = grads_values["dW1"].size, grads_values["db1"].size, grads_values["dW2"].size
-    # offsets = np.cumsum([0, len_0, len_1, len_2])
-    # grads_values["dW1"] = update[offsets[0]:offsets[1]].reshape(grads_values["dW1"].shape).astype(float)
-    # grads_values["db1"] = update[offsets[1]:offsets[2]].reshape(grads_values["db1"].shape).astype(float)
-    # grads_values["dW2"] = update[offsets[2]:offsets[3]].reshape(grads_values["dW2"].shape).astype(float)
-    # grads_values["db2"] = update[offsets[3]:].reshape(grads_values["db2"].shape).astype(float)
-
     return grads_values
