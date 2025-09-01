@@ -11,8 +11,6 @@ import numpy as np
 from itertools import islice
 import time
 import os
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 import threading
 
 def train_fidelity_r2(y_true, y_pred):
@@ -24,7 +22,7 @@ def train_fidelity_r2(y_true, y_pred):
 
 
 
-def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode=False, real_time_loss_plot=True, pause_check_func=None):
+def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode=False, pause_check_func=None):
 
     X                   = database['X_train']
     Y                   = database['Y_train']
@@ -51,18 +49,6 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode
     v = {p: 0 for p in params_values.keys()}
     t = 0
 
-    # Initialize real-time visualization if enabled
-    if real_time_loss_plot:
-        plt.ion()
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.set_xlabel('Epochs')
-        ax.set_ylabel('Loss ')
-        ax.set_title('Training Loss Evolution - Real Time')
-        ax.set_yscale('log')
-        ax.grid(True, which='major', alpha=0.7)  # Major grid lines
-        ax.grid(True, which='minor', alpha=0.3)  # Minor grid lines
-        line, = ax.plot([], [], 'b-', linewidth=2)
-        plt.show(block=False)
 
 
     # Track training execution time
@@ -105,17 +91,6 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode
         momentum_history.append(momentum)
         loss_history.append(mean_loss)
         
-        # Update real-time plot every 50 epochs to reduce overhead
-        if real_time_loss_plot and i % 50 == 0 and len(loss_history) > 1: 
-            try:
-                epochs_range = list(range(len(loss_history)))
-                line.set_data(epochs_range, loss_history)
-                ax.relim()
-                ax.autoscale_view()
-                plt.draw()
-                plt.pause(0.001)
-            except:
-                pass  # Ignore plotting errors to avoid interrupting training
         
         
         # Send data for real-time plotting if available
@@ -123,13 +98,6 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode
             # Send comprehensive training data: model_id, epoch, r2_per_variable, training_fidelity, validation_fidelity, mean_loss
             data_queue.put((model_id, i, r2_per_variable, training_fidelity, validation_fidelity, mean_loss))
         
-    # Close real-time plot
-    if real_time_loss_plot:
-        try:
-            plt.ioff()
-            plt.close(fig)
-        except:
-            pass
     
     
     # Calculate training execution time

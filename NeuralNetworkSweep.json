@@ -47,8 +47,8 @@
         "outputEntryIndices": [
             8, 9, 10
         ],
-        "InputFileName": "CFD_2D.csv",
-        "Delimiter": ";",
+        "InputFileName": "Boston_Housing.csv",
+        "Delimiter": ",",
         "ShowTestEvery": 500,
         "silent_mode": true
     },

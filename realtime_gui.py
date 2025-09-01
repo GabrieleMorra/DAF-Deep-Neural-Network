@@ -352,6 +352,10 @@ class RealTimeTableGUI:
         self.root.configure(bg='#f8f9fa')
         self.root.maxsize(max_width, max_height)
         
+        # Set window to fullscreen
+        self.root.state('zoomed')  # For Windows
+        # Alternative for other platforms: self.root.attributes('-zoomed', True)
+        
         # Store dimensions for later use
         self.max_window_width = max_width
         self.max_window_height = max_height

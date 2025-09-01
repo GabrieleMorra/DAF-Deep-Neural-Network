@@ -207,7 +207,7 @@ def run_model_threaded(layer_neurons, database, sweep_config, results_queue, dat
     
     try:
         # Chiama direttamente TrainNeuralNetwork con controllo pause
-        result = TrainNeuralNetwork(nnModel, database, model_id, data_queue, gui_ref, check_pause_and_deletion)
+        result = TrainNeuralNetwork(nnModel, database, model_id, data_queue, silent_mode=False, pause_check_func=check_pause_and_deletion)
         
         # Only send completion if training actually completed (result is not None)
         if result is not None:
