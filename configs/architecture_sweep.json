@@ -27,19 +27,5 @@
         "InputFileName": "Boston_Housing.csv",
         "Delimiter": ",",
         "ShowTestEvery": 500
-    },
-    "LayerTemplate": {
-        "FirstHiddenLayer": {
-            "activation": "elu"
-        },
-        "SecondHiddenLayer": {
-            "activation": "elu"
-        },
-        "ThirdHiddenLayer": {
-            "activation": "elu"
-        },
-        "OutputLayer": {
-            "activation": "tanh"
-        }
     }
 }

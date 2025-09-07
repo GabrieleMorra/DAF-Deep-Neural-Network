@@ -204,7 +204,7 @@ class RealTimeTableGUI:
                              pos[0]+output_radius, pos[1]+output_radius,
                              fill=node_color, outline='#FF6F00', width=2)
 
-    def __init__(self, param_combinations, max_epochs=15000, config_path="NeuralNetworkSweep.json", data_queue=None, pause_state=None, new_config_queue=None):
+    def __init__(self, param_combinations, max_epochs=15000, config_path="NeuralNetworkSweep.json", data_queue=None, pause_state=None, new_config_queue=None, database_info=None):
         self.param_combinations = param_combinations
         self.max_epochs = max_epochs
         self.config_path = config_path
@@ -230,8 +230,25 @@ class RealTimeTableGUI:
             'error': False
         })
         
-        # Load dataset information dynamically
+        # Load dataset information and full configuration
         self.dataset_info = self._load_dataset_info(config_path)
+        self.config = self._load_full_config(config_path)
+        
+        # Add database sample counts if provided
+        if database_info:
+            X_train = database_info.get('X_train')
+            X_valid = database_info.get('X_valid')
+            
+            # Calculate number of input variables
+            num_inputs = 0
+            if X_train is not None and len(X_train) > 0:
+                num_inputs = len(X_train[0]) if hasattr(X_train[0], '__len__') else 0
+            
+            self.dataset_info.update({
+                'train_samples': len(X_train) if X_train is not None else 0,
+                'val_samples': len(X_valid) if X_valid is not None else 0,
+                'input_variables': list(range(num_inputs))
+            })
         
         # Load ShowTestEvery for dashboard update frequency
         self.show_test_every = self.dataset_info.get('show_test_every', 500)
@@ -278,6 +295,15 @@ class RealTimeTableGUI:
             return config["NeuralNetworkModel"]["outputEntryIndices"]
         except:
             return [0]  # Default to 1 output
+    
+    def _load_full_config(self, config_path):
+        """Load complete configuration for access to global settings"""
+        import json
+        try:
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        except:
+            return {}  # Return empty dict if config cannot be loaded
     
     def _load_dataset_info(self, config_path):
         """Load dataset information from config and CSV files"""
@@ -1564,7 +1590,7 @@ class RealTimeTableGUI:
         import platform
         print("\nGUI closing - terminating all training processes...")
         
-        # Set global shutdown flag to gracefully stop training threads
+        # Set global shutdown flag to stop training threads
         try:
             # Import the shutdown flag from main module
             import __main__
@@ -2079,21 +2105,54 @@ class RealTimeTableGUI:
         from tkinter import messagebox
         
         data = self.model_data.get(model_id, {})
+        current_epoch = data.get('epoch', 0)
+        max_epochs = self.config.get('NeuralNetworkModel', {}).get('epochs', 0) if hasattr(self, 'config') else 10000
         
         info_text = f"Model Configuration: {model_id}\n\n"
         info_text += f"Architecture: {values[1]}\n"
         info_text += f"Current Epoch: {values[2]}\n"
         info_text += f"Status: {values[-1]}\n\n"
         
-        # Add R² scores info
+        # Training metrics (if available)
+        if data.get('current_training_r2') is not None or data.get('current_validation_r2') is not None:
+            info_text += "Training Metrics:\n"
+            if data.get('current_training_r2') is not None:
+                info_text += f"Training R²: {data['current_training_r2']:.2f}%\n"
+            if data.get('current_validation_r2') is not None:
+                info_text += f"Validation R²: {data['current_validation_r2']:.2f}%\n"
+            if data.get('current_loss') is not None:
+                info_text += f"Current Loss: {data['current_loss']:.2E}\n"
+            info_text += "\n"
+        
+        # R² scores per variable
+        info_text += "R² Scores by Variable:\n"
         for i, var in enumerate(self.dataset_info['output_variables']):
             if i < len(data.get('r2_scores', [])):
                 current_r2 = data['r2_scores'][i]
                 max_r2 = data.get('max_r2_scores', [0])[i] if i < len(data.get('max_r2_scores', [])) else 0
-                info_text += f"{var} R²: {current_r2:.2f} (Max: {max_r2:.2f})\n"
+                info_text += f"{var}: {current_r2:.2f}% (Max: {max_r2:.2f}%)\n"
         
         info_text += f"\nBest Epoch: {data.get('best_epoch', 0)}\n"
-        info_text += f"Optimal Stop: {data.get('optimal_stop_epoch', 0)}\n"
+        if current_epoch > 0 and max_epochs > 0:
+            progress = (current_epoch / max_epochs) * 100
+            info_text += f"Progress: {progress:.1f}% ({current_epoch}/{max_epochs})\n"
+        
+        # Dataset info (global)
+        info_text += f"\nDataset Information:\n"
+        info_text += f"Dataset: {self.dataset_info.get('filename', 'Unknown')}\n"
+        if hasattr(self, 'dataset_info'):
+            info_text += f"Training samples: {self.dataset_info.get('train_samples', 'N/A')}"
+            info_text += f", Validation: {self.dataset_info.get('val_samples', 'N/A')}\n"
+            info_text += f"Input variables: {len(self.dataset_info.get('input_variables', []))}"
+            info_text += f", Output variables: {len(self.dataset_info.get('output_variables', []))}\n"
+        
+        # Configuration info (global)
+        if hasattr(self, 'config'):
+            nn_config = self.config.get('NeuralNetworkModel', {})
+            info_text += f"\nConfiguration:\n"
+            info_text += f"Learning rate: {nn_config.get('learning_rate', 'N/A')}\n"
+            info_text += f"Optimizer: {nn_config.get('UpdateMethod', 'N/A')}\n"
+            info_text += f"Max epochs: {nn_config.get('epochs', 'N/A')}\n"
         
         # Status info
         if model_id in self.paused_models:
@@ -2231,12 +2290,40 @@ class RealTimeTableGUI:
             self.pause_button.config(text="▶ Resume", bg='#4caf50')
             self.status_indicator.config(text="■ Paused", fg='#ff9800')
             print(f"[GUI] GLOBAL TRAINING PAUSED by user - is_paused = {self.is_paused}")
+            # Mark all training models as paused visually
+            self._update_global_pause_formatting(paused=True)
         else:
             self.pause_button.config(text="■ Pause", bg=self.colors['warning'])
             print(f"[GUI] GLOBAL TRAINING RESUMED by user - is_paused = {self.is_paused}")
+            # Remove pause formatting from all models
+            self._update_global_pause_formatting(paused=False)
         
         # Force update status display (this will set the correct indicator)
         self.update_status()
+    
+    def _update_global_pause_formatting(self, paused):
+        """Update visual formatting for global pause state"""
+        for model_id, item in self.table_items.items():
+            if model_id in self.model_data:
+                data = self.model_data[model_id]
+                # Only affect models that are not completed and not individually paused
+                if (not data.get('completed', False) and 
+                    model_id not in self.paused_models and 
+                    model_id not in self.deleted_models):
+                    
+                    current_values = list(self.tree.item(item, 'values'))
+                    if paused:
+                        # Mark as globally paused
+                        current_values[-1] = 'Paused (Global)'
+                        self.tree.item(item, values=tuple(current_values), tags=('paused',))
+                    else:
+                        # Restore normal status
+                        if data.get('epoch', 0) > 0:
+                            current_values[-1] = 'Training'
+                            self.tree.item(item, values=tuple(current_values), tags=('training',))
+                        else:
+                            current_values[-1] = 'Waiting'
+                            self.tree.item(item, values=tuple(current_values), tags=())
     
     def open_add_config_window(self):
         """Open window to add new configurations"""
@@ -2374,14 +2461,14 @@ class RealTimeTableGUI:
                 # Multi-layer: "5x10x15" -> [5, 10, 15, 0, 0, 3]
                 neurons = [int(x) for x in model_id.split('x')]
                 total_layers = len(neurons)
-                # Pad with zeros up to max supported layers (assume 5)
-                max_layers = 5
+                # Pad with zeros up to max supported layers
+                max_layers = 10
                 config = neurons + [0] * (max_layers - len(neurons)) + [total_layers]
                 return config
             else:
                 # Single layer: "10" -> [10, 0, 0, 0, 0, 1]
                 neurons = int(model_id)
-                max_layers = 5
+                max_layers = 10
                 config = [neurons] + [0] * (max_layers - 1) + [1]
                 return config
         except:
@@ -2528,7 +2615,7 @@ class AddConfigWindow:
                 font=('Segoe UI', 12), fg=self.colors['text'], bg=self.colors['card']).grid(row=0, column=0, sticky='w', pady=5)
         
         self.layers_var = tk.StringVar(value="2")
-        self.layers_spinbox = tk.Spinbox(input_frame, from_=1, to=5, textvariable=self.layers_var,
+        self.layers_spinbox = tk.Spinbox(input_frame, from_=1, to=10, textvariable=self.layers_var,
                                         font=('Segoe UI', 11), width=10, command=self.update_layer_inputs)
         self.layers_spinbox.grid(row=0, column=1, padx=(10, 0), pady=5)
         
@@ -2637,7 +2724,7 @@ This creates: 10x5x4, 10x5x8, 10x10x4, 10x10x8, etc."""
                 neurons.append(int(value))
             
             # Create configuration in the format expected [n1, n2, n3, ..., 0, 0, total_layers]
-            max_layers = 5  # Assume max 5 layers for padding
+            max_layers = 10  # Support up to 10 layers
             config = neurons + [0] * (max_layers - len(neurons)) + [num_layers]
             
             # Check for duplicates
@@ -2716,7 +2803,7 @@ This creates: 10x5x4, 10x5x8, 10x10x4, 10x10x8, etc."""
             
             # Convert to expected format and add to configurations
             added_count = 0
-            max_layers = 5  # Assume max 5 layers for padding
+            max_layers = 10  # Support up to 10 layers
             
             for combo in combinations:
                 num_layers = len(combo)

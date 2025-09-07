@@ -26,6 +26,9 @@ def main():
         print(f"[ERROR] Configuration file '{config_file}' not found.")
         print("Expected locations: configs/neural_network.json or ./neural_network.json")
         return
+    except Exception as e:
+        print(f"[ERROR] Failed to load configuration: {e}")
+        return
     
     # Convert to legacy format for compatibility
     nnModel = convert_json_format(read_json)
@@ -34,6 +37,9 @@ def main():
     try:
         Database = get_database(nnModel)
         print(f"[SUCCESS] Successfully loaded dataset: {nnModel['NeuralNetworkModel']['InputFileName']}")
+    except FileNotFoundError:
+        print(f"[ERROR] Dataset file not found: {nnModel['NeuralNetworkModel']['InputFileName']}")
+        return
     except Exception as e:
         print(f"[ERROR] Error loading database: {e}")
         return
@@ -63,6 +69,10 @@ def main():
         else:
             print("[ERROR] Training failed or was interrupted")
             
+    except KeyboardInterrupt:
+        print("\n[INFO] Training interrupted by user (Ctrl+C)")
+        print("[INFO] Exiting...")
+        return
     except Exception as e:
         print(f"[ERROR] Training error: {e}")
         # Try to load existing model if training failed
@@ -81,4 +91,8 @@ def main():
             print(f"[ERROR] Error loading existing model: {load_error}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[INFO] Program interrupted by user (Ctrl+C)")
+        print("[INFO] Exiting...")

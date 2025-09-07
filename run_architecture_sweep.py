@@ -46,6 +46,9 @@ def main():
         print(f"[ERROR] Configuration file '{config_file}' not found.")
         print("Expected locations: configs/architecture_sweep.json or ./architecture_sweep.json")
         return
+    except Exception as e:
+        print(f"[ERROR] Failed to load configuration: {e}")
+        return
 
     sweep_config = config["SweepConfiguration"]
     nn_model_base = config["NeuralNetworkModel"]
@@ -57,6 +60,9 @@ def main():
         database = get_database(temp_nn)
         print(f"[SUCCESS] Dataset loaded: {nn_model_base['InputFileName']}")
         print(f"[INFO] Training samples: {len(database['X_train'])}, Validation samples: {len(database['X_valid'])}")
+    except FileNotFoundError:
+        print(f"[ERROR] Dataset file not found: {nn_model_base['InputFileName']}")
+        return
     except Exception as e:
         print(f"[ERROR] Error loading database: {e}")
         return
@@ -82,13 +88,13 @@ def main():
     
     # Initialize GUI with pause state and new config queue
     print("[GUI] Starting real-time monitoring GUI...")
-    gui = RealTimeTableGUI(param_combinations, max_epochs=nn_model_base.get('epochs', 20000), config_path="configs/architecture_sweep.json", data_queue=data_queue, pause_state=pause_state, new_config_queue=new_config_queue)
+    gui = RealTimeTableGUI(param_combinations, max_epochs=nn_model_base.get('epochs', 20000), config_path="configs/architecture_sweep.json", data_queue=data_queue, pause_state=pause_state, new_config_queue=new_config_queue, database_info=database)
     
     # Prepare architecture training jobs
     jobs = []
     for i, arch_config in enumerate(architectures):
         model_id = get_architecture_id(arch_config)
-        jobs.append((i, model_id, arch_config, database.copy()))
+        jobs.append((i, model_id, arch_config, database))
 
     print(f"\n[INFO] Starting parallel training of {len(jobs)} architectures...")
     
@@ -108,7 +114,7 @@ def main():
             # Submit initial jobs with pause state
             future_to_job = {}
             for job_id, model_id, arch_config, db in jobs:
-                future = executor.submit(train_single_architecture, job_id, model_id, arch_config, db, data_queue, pause_state)
+                future = executor.submit(train_single_architecture, job_id, model_id, arch_config, db, data_queue, pause_state, gui)
                 future_to_job[future] = (job_id, model_id)
                 submitted_jobs.add(model_id)
             
@@ -129,23 +135,7 @@ def main():
                         new_configs_processed += 1
                         
                         # Convert config back to architecture
-                        # Handle both old format (n1, n2, n3, num_layers) and new format [n1, n2, n3, 0, 0, num_layers]
-                        if len(config_tuple) == 4:
-                            # Old format
-                            n1, n2, n3, num_layers = config_tuple
-                        else:
-                            # New format: [n1, n2, n3, ..., 0, 0, num_layers] where last element is num_layers
-                            num_layers = config_tuple[-1]  # Last element is always num_layers
-                            n1 = config_tuple[0] if len(config_tuple) > 0 else 0
-                            n2 = config_tuple[1] if len(config_tuple) > 1 else 0
-                            n3 = config_tuple[2] if len(config_tuple) > 2 else 0
-                        
-                        if num_layers == 1:
-                            hidden_neurons = [n1]
-                        elif num_layers == 2:
-                            hidden_neurons = [n1, n2]
-                        elif num_layers == 3:
-                            hidden_neurons = [n1, n2, n3]
+                        hidden_neurons = parse_config_tuple(config_tuple)
                         
                         # Create architecture config
                         arch_config = create_architecture_config(nn_model_base, hidden_neurons)
@@ -154,7 +144,7 @@ def main():
                         # Only submit if not already submitted - threads will pick up the work
                         if model_id not in submitted_jobs:
                             job_id = len(submitted_jobs)  # New job ID
-                            future = executor.submit(train_single_architecture, job_id, model_id, arch_config, database.copy(), data_queue, pause_state)
+                            future = executor.submit(train_single_architecture, job_id, model_id, arch_config, database, data_queue, pause_state, gui)
                             future_to_job[future] = (job_id, model_id)
                             submitted_jobs.add(model_id)
                             print(f"[INFO] Submitted new training job for {model_id}")
@@ -195,11 +185,12 @@ def main():
                             except Exception as e:
                                 print(f"[ERROR] [{completed_count}] {model_id} error: {e}")
                             
-                            # Memory cleanup
-                            gc.collect()
+                            # Periodic memory cleanup for completed jobs
+                            if completed_count % 5 == 0:  # Every 5 completed jobs
+                                gc.collect()
                     
-                    # Always wait a bit to allow new configurations to be checked
-                    time.sleep(0.5)
+                    # Brief wait to allow new configurations to be checked
+                    time.sleep(0.1)
                 else:
                     # No active jobs, but threads are still alive waiting for work
                     if training_state["stop_requested"]:
@@ -209,7 +200,7 @@ def main():
                     if new_config_queue.qsize() > 0:
                         continue  # Don't sleep, process immediately
                     
-                    time.sleep(1)  # Shorter sleep for more responsive queue checking
+                    time.sleep(0.5)  # Brief sleep for responsive queue checking
         
         finally:
             # Only shutdown executor when explicitly stopping
@@ -261,8 +252,8 @@ def main():
         except Exception as e:
             print(f"[WARNING] Error stopping data collection: {e}")
         
-        # Give threads a moment to stop
-        time.sleep(0.5)
+        # Brief wait for threads to stop
+        time.sleep(0.2)
         gui.root.destroy()
     
     gui.root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -287,19 +278,43 @@ def main():
         # Force exit to ensure all threads are terminated
         os._exit(0)
 
-def generate_param_combinations(sweep_config):
-    """Generate parameter combinations for GUI initialization"""
-    combinations = []
+def parse_config_tuple(config_tuple):
+    """Parse configuration tuple into hidden neurons list"""
+    # Handle both old format (n1, n2, n3, num_layers) and new format [n1, n2, n3, ..., 0, num_layers]
+    if len(config_tuple) == 4:
+        # Old format: (n1, n2, n3, num_layers)
+        n1, n2, n3, num_layers = config_tuple
+        all_neurons = [n1, n2, n3]
+    else:
+        # New format: [n1, n2, n3, ..., 0, 0, num_layers] where last element is num_layers
+        num_layers = config_tuple[-1]  # Last element is always num_layers
+        all_neurons = list(config_tuple[:-1])  # All neurons except last element
     
-    # Dynamically read layer configurations based on what exists in JSON
+    # Extract only the neurons for the number of layers specified
+    hidden_neurons = all_neurons[:num_layers]
+    
+    # Remove any zeros (padding) from the end
+    while hidden_neurons and hidden_neurons[-1] == 0:
+        hidden_neurons.pop()
+    
+    return hidden_neurons
+
+def get_layer_configs(sweep_config):
+    """Extract layer configurations from sweep config"""
     layer_configs = {}
     layer_counts = sweep_config["total_layers_range"]
     
-    # Get all available layer configurations  
     for i in range(1, max(layer_counts) + 1):
         layer_key = f"{'first' if i == 1 else 'second' if i == 2 else 'third'}_hidden_neurons_range"
         if layer_key in sweep_config:
             layer_configs[i] = sweep_config[layer_key]
+    
+    return layer_configs, layer_counts
+
+def generate_param_combinations(sweep_config):
+    """Generate parameter combinations for GUI initialization"""
+    combinations = []
+    layer_configs, layer_counts = get_layer_configs(sweep_config)
 
     for num_layers in layer_counts:
         if num_layers == 1 and 1 in layer_configs:
@@ -317,17 +332,12 @@ def generate_param_combinations(sweep_config):
 def generate_architectures(sweep_config, nn_model_base):
     """Generate all possible architecture combinations"""
     architectures = []
+    layer_configs, layer_counts = get_layer_configs(sweep_config)
     
-    # Dynamically read layer configurations based on what exists in JSON
-    layer_configs = {}
-    layer_counts = sweep_config["total_layers_range"]
-    
-    # Get all available layer configurations
+    # Check for missing layer configurations
     for i in range(1, max(layer_counts) + 1):
         layer_key = f"{'first' if i == 1 else 'second' if i == 2 else 'third'}_hidden_neurons_range"
-        if layer_key in sweep_config:
-            layer_configs[i] = sweep_config[layer_key]
-        else:
+        if i not in layer_configs:
             print(f"[WARNING] {layer_key} not found in config, skipping layers > {i-1}")
             break
 
@@ -379,7 +389,7 @@ def get_architecture_id(config):
     neurons = [str(config[layer]["output_dim"]) for layer in sorted(layers)]
     return "x".join(neurons)
 
-def train_single_architecture(job_id, model_id, arch_config, database, data_queue, pause_state=None):
+def train_single_architecture(job_id, model_id, arch_config, database, data_queue, pause_state=None, gui_ref=None):
     """Train a single architecture"""
     try:
         # Set CPU affinity for better performance isolation
@@ -393,6 +403,10 @@ def train_single_architecture(job_id, model_id, arch_config, database, data_queu
         def pause_check():
             if pause_state is None:
                 return None  # No pause control
+            
+            # Check global pause first (if GUI reference is available)
+            if gui_ref and hasattr(gui_ref, 'is_paused') and gui_ref.is_paused:
+                return False  # False = paused (global pause)
             
             # Check if this model is deleted
             if model_id in pause_state.get('deleted', set()):
