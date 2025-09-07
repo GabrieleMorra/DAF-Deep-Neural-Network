@@ -1,0 +1,45 @@
+{
+    "SweepConfiguration": {
+        "first_hidden_neurons_range": [
+            5
+        ],
+        "second_hidden_neurons_range": [
+            5
+        ],
+        "total_layers_range": [
+            1,
+            2
+        ],
+        "max_threads": 4
+    },
+    "NeuralNetworkModel": {
+        "loss": "LC",
+        "UpdateMethod": "Adam",
+        "learning_rate": 1E-3,
+        "training_testing_ratio": 0.8,
+        "epochs": 10000,
+        "inputEntryIndices": [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+        ],
+        "outputEntryIndices": [
+            13
+        ],
+        "InputFileName": "Boston_Housing.csv",
+        "Delimiter": ",",
+        "ShowTestEvery": 500
+    },
+    "LayerTemplate": {
+        "FirstHiddenLayer": {
+            "activation": "elu"
+        },
+        "SecondHiddenLayer": {
+            "activation": "elu"
+        },
+        "ThirdHiddenLayer": {
+            "activation": "elu"
+        },
+        "OutputLayer": {
+            "activation": "tanh"
+        }
+    }
+}

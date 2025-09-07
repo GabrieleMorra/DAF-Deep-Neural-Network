@@ -8,7 +8,9 @@
       "Bash(rm:*)",
       "Bash(grep:*)",
       "Bash(git checkout:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(tree:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }
