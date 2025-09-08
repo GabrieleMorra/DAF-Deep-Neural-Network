@@ -14,13 +14,14 @@ import numpy as np
 from collections import defaultdict
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from daf_neural_network.gui.realtime_monitor import RealTimeTableGUI
 from daf_neural_network.data.preprocessing import get_database
 from daf_neural_network.core.trainer import TrainNeuralNetwork
 from daf_neural_network.utils.config import load_config, convert_json_format
 from daf_neural_network.utils.helpers import ensure_output_directory
-from queue import Queue, Empty
+from multiprocessing import Queue, Manager
+from queue import Empty
 import pickle
 import psutil
 import gc
@@ -72,19 +73,26 @@ def main():
     print(f"[INFO] Generated {len(architectures)} unique architectures to test")
     
     max_threads = sweep_config.get("max_threads", min(4, mp.cpu_count()))
-    print(f"[INFO] Using {max_threads} parallel threads")
+    print(f"[INFO] Using {max_threads} parallel processes")
+    print(f"[INFO] Available CPU cores: {mp.cpu_count()}")
+    print(f"[INFO] CPU utilization will be distributed across cores")
 
-    # Create data queue for real-time GUI updates
-    data_queue = Queue()
+    # Create multiprocessing manager for shared data structures
+    manager = Manager()
+    
+    # Create data queue for real-time GUI updates (multiprocessing-safe)
+    data_queue = manager.Queue()
     
     # Generate parameter combinations for GUI
     param_combinations = generate_param_combinations(sweep_config)
     
-    # Pause/delete state shared between GUI and training threads
-    pause_state = {"paused": set(), "deleted": set()}
+    # Pause/delete state shared between GUI and training processes
+    pause_state = manager.dict()
+    pause_state["paused"] = manager.list()
+    pause_state["deleted"] = manager.list()
     
     # Queue for new configurations to be added dynamically
-    new_config_queue = Queue()
+    new_config_queue = manager.Queue()
     
     # Initialize GUI with pause state and new config queue
     print("[GUI] Starting real-time monitoring GUI...")
@@ -106,22 +114,23 @@ def main():
         completed_count = 0
         submitted_jobs = set()  # Track which models have been submitted
         
-        # Create persistent executor that doesn't close automatically
-        executor = ThreadPoolExecutor(max_workers=max_threads)
+        # Create ProcessPoolExecutor for true parallelization (bypasses GIL)
+        executor = ProcessPoolExecutor(max_workers=max_threads)
         training_state["executor"] = executor
         
         try:
             # Submit initial jobs with pause state
             future_to_job = {}
             for job_id, model_id, arch_config, db in jobs:
-                future = executor.submit(train_single_architecture, job_id, model_id, arch_config, db, data_queue, pause_state, gui)
+                future = executor.submit(train_single_architecture, job_id, model_id, arch_config, db, data_queue, pause_state)
                 future_to_job[future] = (job_id, model_id)
                 submitted_jobs.add(model_id)
             
-            print(f"[INFO] Thread pool created with {max_threads} persistent threads")
+            print(f"[INFO] Process pool created with {max_threads} worker processes")
+            print(f"[INFO] Each process will be assigned to a dedicated CPU core")
             print(f"[INFO] Submitted {len(jobs)} initial jobs")
             
-            # Keep loop running until stop is requested - threads stay alive
+            # Keep loop running until stop is requested - processes stay alive
             loop_count = 0
             while not training_state["stop_requested"]:
                 loop_count += 1
@@ -144,7 +153,7 @@ def main():
                         # Only submit if not already submitted - threads will pick up the work
                         if model_id not in submitted_jobs:
                             job_id = len(submitted_jobs)  # New job ID
-                            future = executor.submit(train_single_architecture, job_id, model_id, arch_config, database, data_queue, pause_state, gui)
+                            future = executor.submit(train_single_architecture, job_id, model_id, arch_config, database, data_queue, pause_state)
                             future_to_job[future] = (job_id, model_id)
                             submitted_jobs.add(model_id)
                             print(f"[INFO] Submitted new training job for {model_id}")
@@ -390,30 +399,43 @@ def get_architecture_id(config):
     return "x".join(neurons)
 
 def train_single_architecture(job_id, model_id, arch_config, database, data_queue, pause_state=None, gui_ref=None):
-    """Train a single architecture"""
+    """Train a single architecture with dedicated CPU core assignment"""
     try:
-        # Set CPU affinity for better performance isolation
-        if hasattr(os, 'sched_setaffinity'):
-            available_cpus = list(os.sched_getaffinity(0))
-            if available_cpus:
-                cpu_id = available_cpus[job_id % len(available_cpus)]
-                os.sched_setaffinity(0, {cpu_id})
+        # Set CPU affinity using psutil for cross-platform support
+        process = psutil.Process()
+        available_cpus = list(range(psutil.cpu_count()))
         
-        # Create pause check function
+        if available_cpus:
+            # Assign each process to a dedicated CPU core
+            assigned_cpu = available_cpus[job_id % len(available_cpus)]
+            try:
+                process.cpu_affinity([assigned_cpu])
+                print(f"[CPU] Process {model_id} assigned to CPU core {assigned_cpu}")
+            except (OSError, AttributeError) as e:
+                print(f"[WARNING] Could not set CPU affinity for {model_id}: {e}")
+        
+        # Set process priority to high for better performance
+        try:
+            if hasattr(psutil, 'HIGH_PRIORITY_CLASS'):
+                process.nice(psutil.HIGH_PRIORITY_CLASS)
+            else:
+                process.nice(-5)  # Unix-like systems
+        except (OSError, AttributeError):
+            pass  # Continue without priority adjustment
+        
+        # Create pause check function for multiprocessing
         def pause_check():
             if pause_state is None:
                 return None  # No pause control
             
-            # Check global pause first (if GUI reference is available)
-            if gui_ref and hasattr(gui_ref, 'is_paused') and gui_ref.is_paused:
-                return False  # False = paused (global pause)
+            # Note: GUI reference doesn't work across processes, so skip global pause check
             
-            # Check if this model is deleted
-            if model_id in pause_state.get('deleted', set()):
+            # Check if this model is deleted (convert to list for multiprocessing compatibility)
+            if model_id in list(pause_state.get('deleted', [])):
                 return True  # True = deleted
             
-            # Check if this model is paused
-            if model_id in pause_state.get('paused', set()):
+            # Check if this model is paused (convert to list for multiprocessing compatibility)
+            if model_id in list(pause_state.get('paused', [])):
                 return False  # False = paused
             
             return None  # None = continue training

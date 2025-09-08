@@ -1,16 +1,16 @@
 {
     "SweepConfiguration": {
         "first_hidden_neurons_range": [
-            5
+            5, 10, 15, 20, 25, 30
         ],
         "second_hidden_neurons_range": [
-            5
+            5, 10, 15, 20, 25, 30
         ],
         "total_layers_range": [
             1,
             2
         ],
-        "max_threads": 4
+        "max_threads": 3
     },
     "NeuralNetworkModel": {
         "loss": "LC",

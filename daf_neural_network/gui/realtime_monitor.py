@@ -218,14 +218,14 @@ class RealTimeTableGUI:
         # Initialize model data with dynamic R2 scores for multiple outputs
         num_outputs = len(self._get_output_variables_preview(config_path))
         default_r2_scores = [0.0] * num_outputs
-        default_max_r2_scores = [0.0] * num_outputs
-        default_max_r2_epochs = [0] * num_outputs
         self.model_data = defaultdict(lambda: {
-            'epoch': 0, 
-            'r2_scores': default_r2_scores.copy(), 
-            'max_r2_scores': default_max_r2_scores.copy(),
-            'max_r2_epochs': default_max_r2_epochs.copy(),
-            'optimal_stop_epoch': 0,
+            'current_epoch': 0, 
+            'best_epoch': 0,
+            'best_r2_scores': default_r2_scores.copy(),
+            'best_avg_r2': 0.0,
+            'best_training_fidelity': 0.0,
+            'best_validation_fidelity': 0.0,
+            'best_loss': None,  # None = not started, will display as N/A
             'completed': False, 
             'error': False
         })
@@ -547,16 +547,16 @@ class RealTimeTableGUI:
                  background=[('selected', self.colors['secondary'])],
                  foreground=[('selected', 'white')])
         
-        # Create compact columns - ID first, then architecture, current R² values, summary info, and optimal stop
+        # Create compact columns - ID first, then architecture, epoch, best epoch, then R² values, summary info
         id_columns = ['ID']
-        base_columns = ['Architecture', 'Epoch']
+        base_columns = ['Architecture', 'Epoch', 'Best_Epoch']
         output_columns = [f'{var}_R2' for var in self.dataset_info['output_variables']]
         
-        # Only show average if multiple outputs
+        # Only show average R2 (remove max R2)
         if len(self.dataset_info['output_variables']) > 1:
-            summary_columns = ['Avg_Max_R2', 'Best_Epoch', 'Training_R2', 'Validation_R2', 'Loss']
+            summary_columns = ['Avg_R2', 'Training_R2', 'Validation_R2', 'Loss']
         else:
-            summary_columns = ['Max_R2', 'Best_Epoch', 'Training_R2', 'Validation_R2', 'Loss']
+            summary_columns = ['Training_R2', 'Validation_R2', 'Loss']
             
         status_columns = ['Status']
         columns = tuple(id_columns + base_columns + output_columns + summary_columns + status_columns)
@@ -572,22 +572,20 @@ class RealTimeTableGUI:
         self.tree.heading('#1', text='ID', command=lambda: self.sort_column('ID'))
         self.tree.heading('#2', text='Architecture', command=lambda: self.sort_column('Architecture'))
         self.tree.heading('#3', text='Epoch', command=lambda: self.sort_column('Epoch'))
+        self.tree.heading('#4', text='Best Epoch', command=lambda: self.sort_column('Best_Epoch'))
         
-        col_num = 4
-        # Current R² for each output variable
+        col_num = 5
+        # R² for each output variable (showing best epoch values)
         for i, output_var in enumerate(self.dataset_info['output_variables']):
             col_name = f'{output_var}_R2'
             self.tree.heading(f'#{col_num}', text=f'{output_var} R²', command=lambda c=col_name: self.sort_column(c))
             col_num += 1
         
-        # Summary columns
+        # Summary columns - only show average R2 if multiple outputs
         if len(self.dataset_info['output_variables']) > 1:
-            self.tree.heading(f'#{col_num}', text='Avg Max R²', command=lambda: self.sort_column('Avg_Max_R2'))
-        else:
-            self.tree.heading(f'#{col_num}', text='Max R²', command=lambda: self.sort_column('Max_R2'))
-        col_num += 1
-        self.tree.heading(f'#{col_num}', text='Best Epoch', command=lambda: self.sort_column('Best_Epoch'))
-        col_num += 1
+            self.tree.heading(f'#{col_num}', text='Avg R²', command=lambda: self.sort_column('Avg_R2'))
+            col_num += 1
+            
         self.tree.heading(f'#{col_num}', text='Training Fidelity', command=lambda: self.sort_column('Training_R2'))
         col_num += 1
         self.tree.heading(f'#{col_num}', text='Validation Fidelity', command=lambda: self.sort_column('Validation_R2'))
@@ -651,10 +649,16 @@ class RealTimeTableGUI:
             # Store ID in model data for efficiency
             self.model_data[model_id]['id'] = idx
             
-            # Create initial values: ID, Architecture, Epoch, Current R² scores, Summary columns, Status
-            initial_values = [str(idx), arch_label, '0']
-            initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))  # Current R² scores
-            initial_values.extend(['0.00', '0', '0.00', '0.00', '0.00E+00'])  # Max R² (or Avg Max R²), Best Epoch, Training Fidelity, Validation Fidelity, Loss
+            # Create initial values: ID, Architecture, Epoch, Best Epoch, R² scores, Summary columns, Status
+            initial_values = [str(idx), arch_label, '0', '0']  # ID, Architecture, Current Epoch, Best Epoch
+            initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))  # R² scores per variable
+            
+            # Add Avg R² column only if multiple outputs
+            if len(self.dataset_info['output_variables']) > 1:
+                initial_values.append('0.00')  # Avg R²
+            
+            # Add remaining summary columns: Training Fidelity, Validation Fidelity, Loss
+            initial_values.extend(['0.00', '0.00', 'N/A'])  # Training, Validation, Loss
             initial_values.append('Waiting')  # Status
             
             # Insert row
@@ -1264,58 +1268,60 @@ class RealTimeTableGUI:
         self.root.after(800, blink)
         
     def add_data_point(self, model_id, epoch, r2_scores, training_fidelity=None, validation_fidelity=None, mean_loss=None):
-        """Add a data point and update the table"""
-        self.model_data[model_id]['epoch'] = epoch
+        """Add a data point and update the table only when best epoch changes"""
+        self.model_data[model_id]['current_epoch'] = epoch
         
-        # Handle both single value and list of values
+        # Handle both single value and list of values for R2 scores
         if isinstance(r2_scores, (list, tuple)):
             current_r2 = list(r2_scores)
-            self.model_data[model_id]['r2_scores'] = current_r2
         else:
             # Single value - put it in the first position, pad others with 0
-            current_r2 = [r2_scores] + [0.0] * (len(self.model_data[model_id]['r2_scores']) - 1)
-            self.model_data[model_id]['r2_scores'] = current_r2
-        
-        # Update maximum R² values and epochs
-        for i, r2_val in enumerate(current_r2):
-            if r2_val > self.model_data[model_id]['max_r2_scores'][i]:
-                self.model_data[model_id]['max_r2_scores'][i] = r2_val
-                self.model_data[model_id]['max_r2_epochs'][i] = epoch
+            current_r2 = [r2_scores] + [0.0] * (len(self.model_data[model_id]['best_r2_scores']) - 1)
         
         # Calculate current average R² for this epoch
         current_avg_r2 = sum(current_r2) / len(current_r2) if current_r2 else 0
         
-        # Track the best average R² and its epoch
-        if 'best_avg_r2' not in self.model_data[model_id]:
-            self.model_data[model_id]['best_avg_r2'] = 0
-            self.model_data[model_id]['best_epoch'] = 0
-        
-        # Update best epoch based on maximum average R²
+        # Only update display data if this is a new best epoch (higher avg R²)
+        is_new_best = False
         if current_avg_r2 > self.model_data[model_id]['best_avg_r2']:
-            self.model_data[model_id]['best_avg_r2'] = current_avg_r2
+            is_new_best = True
             self.model_data[model_id]['best_epoch'] = epoch
+            self.model_data[model_id]['best_avg_r2'] = current_avg_r2
+            self.model_data[model_id]['best_r2_scores'] = current_r2.copy()
+            
+            # Update best training metrics if provided
+            if training_fidelity is not None:
+                self.model_data[model_id]['best_training_fidelity'] = training_fidelity
+            if validation_fidelity is not None:
+                self.model_data[model_id]['best_validation_fidelity'] = validation_fidelity
+            if mean_loss is not None:
+                self.model_data[model_id]['best_loss'] = mean_loss
         
-        # Calculate summary statistics for display
-        max_r2_scores = self.model_data[model_id]['max_r2_scores']
-        # Average of maximum R² scores achieved (for display)
-        avg_max_r2 = sum(max_r2_scores) / len(max_r2_scores) if max_r2_scores else 0
-        self.model_data[model_id]['avg_max_r2'] = avg_max_r2
+        # Update table only if we have a new best epoch
+        if is_new_best:
+            self.root.after(0, self.update_table_row, model_id)
         
-        # Store live training metrics if provided
-        if training_fidelity is not None:
-            self.model_data[model_id]['current_training_r2'] = training_fidelity
-        if validation_fidelity is not None:
-            self.model_data[model_id]['current_validation_r2'] = validation_fidelity
-        if mean_loss is not None:
-            self.model_data[model_id]['current_loss'] = mean_loss
-        
-        # Update table in main thread
-        self.root.after(0, self.update_table_row, model_id)
+        # Always update current epoch in table (but other values stay from best epoch)
+        self.root.after(0, self.update_current_epoch, model_id)
         
         # Update dashboard periodically (based on ShowTestEvery to avoid excessive updates)
-        show_every = getattr(self, 'show_test_every', 500)  # Default to 500 if not set
+        show_every = getattr(self, 'show_test_every', 500)
         if epoch % show_every == 0:
             self.root.after(0, self.update_status)
+    
+    def update_current_epoch(self, model_id):
+        """Update only the current epoch column without changing other values"""
+        try:
+            for item in self.tree.get_children():
+                values = self.tree.item(item, 'values')
+                if values and values[1] == self.model_labels.get(model_id, model_id):
+                    # Update only the current epoch (3rd column, index 2)
+                    updated_values = list(values)
+                    updated_values[2] = str(self.model_data[model_id]['current_epoch'])
+                    self.tree.item(item, values=updated_values)
+                    break
+        except (KeyError, AttributeError, tk.TclError):
+            pass
         
     def mark_completed(self, model_id, final_results=None):
         """Mark a model as completed and store final results"""
@@ -1349,7 +1355,7 @@ class RealTimeTableGUI:
         self.root.after(0, self.update_table_row, model_id)
     
     def update_table_row(self, model_id):
-        """Update a specific row in the table"""
+        """Update a specific row in the table with best epoch values"""
         if model_id not in self.table_items:
             return
             
@@ -1366,47 +1372,35 @@ class RealTimeTableGUI:
         elif data.get('gui_paused', False):
             status = 'Paused'
             tag = 'paused'
-        elif data['epoch'] > 0:
+        elif data['current_epoch'] > 0:
             status = 'Training'
             tag = 'training'
         else:
             status = 'Waiting'
             tag = 'waiting'
         
-        # Build values: ID, Architecture, Epoch, Current R² scores, Summary stats, Status
+        # Build values: ID, Architecture, Current Epoch, Best Epoch, Best R² scores, Summary stats, Status
         model_index = data.get('id', '?')
-        values = [str(model_index), arch_label, f"{data['epoch']}"]
+        values = [
+            str(model_index), 
+            arch_label, 
+            f"{data['current_epoch']}", 
+            f"{data['best_epoch']}"
+        ]
         
-        # Add current R² scores for each output variable
-        for i, r2_score in enumerate(data['r2_scores']):
+        # Add best R² scores for each output variable
+        for i, r2_score in enumerate(data['best_r2_scores']):
             values.append(f"{r2_score:.2f}")
         
-        # Add summary statistics
-        best_epoch = data.get('best_epoch', 0)
-        
-        # Show either average or single max R² depending on number of outputs
+        # Add summary statistics (only average R² if multiple outputs)
         if len(self.dataset_info['output_variables']) > 1:
-            summary_r2 = data.get('avg_max_r2', 0)
-        else:
-            summary_r2 = data.get('max_r2_scores', [0])[0] if data.get('max_r2_scores') else 0
+            values.append(f"{data['best_avg_r2']:.2f}")
         
-        # Use final results if completed, otherwise use current live values
-        if data.get('completed', False):
-            training_r2 = data.get('final_training_r2', 0.0)
-            validation_r2 = data.get('final_validation_r2', 0.0)
-            final_loss = data.get('final_loss', 0.0)
-        else:
-            # Use live values during training
-            training_r2 = data.get('current_training_r2', 0.0)
-            validation_r2 = data.get('current_validation_r2', 0.0)
-            final_loss = data.get('current_loss', 0.0)
-        
+        # Add best metrics from best epoch
         values.extend([
-            f"{summary_r2:.2f}", 
-            f"{best_epoch}",
-            f"{training_r2:.2f}",
-            f"{validation_r2:.2f}",
-            f"{final_loss:.2e}"
+            f"{data['best_training_fidelity']:.2f}",
+            f"{data['best_validation_fidelity']:.2f}",
+            f"{data['best_loss']:.2e}" if data['best_loss'] is not None else "N/A"
         ])
         values.append(status)
         
@@ -1428,8 +1422,8 @@ class RealTimeTableGUI:
         active_models = {k: v for k, v in self.model_data.items() if k not in self.deleted_models}
         
         completed = len([m for m in active_models.values() if m['completed']])
-        training = len([m for m in active_models.values() if m['epoch'] > 0 and not m['completed'] and not m['error']])
-        waiting = len([m for m in active_models.values() if m['epoch'] == 0 and not m['error']])
+        training = len([m for m in active_models.values() if m['current_epoch'] > 0 and not m['completed'] and not m['error']])
+        waiting = len([m for m in active_models.values() if m['current_epoch'] == 0 and not m['error']])
         errors = len([m for m in active_models.values() if m['error']])
         
         # Total = original configurations + pending configurations (excluding deleted)
@@ -1477,8 +1471,8 @@ class RealTimeTableGUI:
                     # Use best_avg_r2 if available, otherwise calculate from current r2_scores
                     if 'best_avg_r2' in model and model['best_avg_r2'] > 0:
                         avg_r2_values.append(model['best_avg_r2'])
-                    elif 'r2_scores' in model and model['r2_scores']:
-                        current_avg = sum(model['r2_scores']) / len(model['r2_scores'])
+                    elif 'best_r2_scores' in model and model['best_r2_scores']:
+                        current_avg = sum(model['best_r2_scores']) / len(model['best_r2_scores'])
                         avg_r2_values.append(current_avg)
                 
                 if avg_r2_values:
@@ -1520,13 +1514,51 @@ class RealTimeTableGUI:
             pass
         
     def collect_training_data(self, data_queue):
-        """Collect data from training threads"""
+        """Collect data from training processes with optimized polling"""
+        batch_updates = []
+        last_update_time = time.time()
+        
         while self.data_collection_active:
             try:
-                data = data_queue.get(timeout=1)
+                # Use short timeout for responsiveness, batch updates for efficiency
+                data = data_queue.get(timeout=0.1)
                 if data is None:
                     break
                 
+                # Queue the update instead of processing immediately
+                batch_updates.append(data)
+                
+                # Process updates in batches every 0.5 seconds or when batch gets large
+                current_time = time.time()
+                if len(batch_updates) >= 10 or (current_time - last_update_time) >= 0.5:
+                    # Schedule batch update on main thread using after_idle for better responsiveness
+                    self.root.after_idle(lambda updates=batch_updates.copy(): self.process_batch_updates(updates))
+                    batch_updates.clear()
+                    last_update_time = current_time
+                
+            except Empty:
+                # Process any remaining updates when queue is empty
+                if batch_updates:
+                    current_time = time.time()
+                    if (current_time - last_update_time) >= 0.2:  # Shorter delay when queue is empty
+                        self.root.after_idle(lambda updates=batch_updates.copy(): self.process_batch_updates(updates))
+                        batch_updates.clear()
+                        last_update_time = current_time
+                
+                # Small sleep to prevent busy waiting and improve GUI responsiveness
+                time.sleep(0.05)
+                continue
+                
+            except Exception as e:
+                # Handle other exceptions with logging, but only if GUI is still active
+                if self.data_collection_active:
+                    print(f"Error in data collection: {e}")
+                continue
+    
+    def process_batch_updates(self, updates):
+        """Process a batch of updates on the main GUI thread"""
+        for data in updates:
+            try:
                 if len(data) == 6:
                     # Enhanced training data with live metrics
                     model_id, epoch, r2_scores, training_fidelity, validation_fidelity, mean_loss = data
@@ -1552,14 +1584,8 @@ class RealTimeTableGUI:
                     # Resume training marker
                     model_id = data[0]
                     self.mark_training_status(model_id)
-                
-            except Empty:
-                # Empty exceptions are normal when no data is available - continue silently
-                continue
             except Exception as e:
-                # Handle other exceptions with logging, but only if GUI is still active
-                if self.data_collection_active:
-                    print(f"Error in data collection: {e}")
+                print(f"Error processing update {data}: {e}")
                 continue
     
     def stop_data_collection(self):
@@ -1647,12 +1673,12 @@ class RealTimeTableGUI:
             values = self.tree.item(item, 'values')
             items.append((item, values))
         
-        # Find column index
-        columns = ['ID', 'Architecture', 'Epoch'] + [f'{var}_R2' for var in self.dataset_info['output_variables']]
+        # Find column index - updated structure: ID, Architecture, Epoch, Best_Epoch, R2s, Avg_R2?, Training, Validation, Loss, Status
+        columns = ['ID', 'Architecture', 'Epoch', 'Best_Epoch'] + [f'{var}_R2' for var in self.dataset_info['output_variables']]
         if len(self.dataset_info['output_variables']) > 1:
-            columns.extend(['Avg_Max_R2', 'Best_Epoch', 'Training_R2', 'Validation_R2', 'Loss'])
+            columns.extend(['Avg_R2', 'Training_R2', 'Validation_R2', 'Loss'])
         else:
-            columns.extend(['Max_R2', 'Best_Epoch', 'Training_R2', 'Validation_R2', 'Loss'])
+            columns.extend(['Training_R2', 'Validation_R2', 'Loss'])
         columns.append('Status')
         
         try:
@@ -1669,16 +1695,18 @@ class RealTimeTableGUI:
                 return int(value) if value.isdigit() else 0
             elif col_name in ['Epoch', 'Best_Epoch']:
                 return int(value) if value.isdigit() else 0
-            elif '_R2' in col_name or 'Max_R2' in col_name or col_name in ['Training_R2', 'Validation_R2']:
+            elif '_R2' in col_name or 'Avg_R2' in col_name or col_name in ['Training_R2', 'Validation_R2']:
                 try:
                     return float(value)
                 except ValueError:
                     return 0.0
             elif col_name == 'Loss':
+                if value == "N/A":
+                    return float('inf')  # N/A goes to the end when sorting ascending
                 try:
                     return float(value)
                 except ValueError:
-                    return 0.0
+                    return float('inf')
             elif col_name == 'Architecture':
                 # Sort architectures logically: single numbers first, then combinations
                 if 'x' in value:
@@ -2105,7 +2133,7 @@ class RealTimeTableGUI:
         from tkinter import messagebox
         
         data = self.model_data.get(model_id, {})
-        current_epoch = data.get('epoch', 0)
+        current_epoch = data.get('current_epoch', 0)
         max_epochs = self.config.get('NeuralNetworkModel', {}).get('epochs', 0) if hasattr(self, 'config') else 10000
         
         info_text = f"Model Configuration: {model_id}\n\n"
@@ -2127,10 +2155,9 @@ class RealTimeTableGUI:
         # R² scores per variable
         info_text += "R² Scores by Variable:\n"
         for i, var in enumerate(self.dataset_info['output_variables']):
-            if i < len(data.get('r2_scores', [])):
-                current_r2 = data['r2_scores'][i]
-                max_r2 = data.get('max_r2_scores', [0])[i] if i < len(data.get('max_r2_scores', [])) else 0
-                info_text += f"{var}: {current_r2:.2f}% (Max: {max_r2:.2f}%)\n"
+            if i < len(data.get('best_r2_scores', [])):
+                best_r2 = data['best_r2_scores'][i]
+                info_text += f"{var}: {best_r2:.2f}%\n"
         
         info_text += f"\nBest Epoch: {data.get('best_epoch', 0)}\n"
         if current_epoch > 0 and max_epochs > 0:
@@ -2410,10 +2437,16 @@ class RealTimeTableGUI:
             # Store ID in model data
             self.model_data[model_id]['id'] = new_id
             
-            # Create table row
-            initial_values = [str(new_id), label_text, '0']
-            initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))
-            initial_values.extend(['0.00', '0', '0.00', '0.00', '0.00E+00'])
+            # Create table row with correct structure
+            initial_values = [str(new_id), label_text, '0', '0']  # ID, Architecture, Current Epoch, Best Epoch
+            initial_values.extend(['0.00'] * len(self.dataset_info['output_variables']))  # R² scores per variable
+            
+            # Add Avg R² column only if multiple outputs
+            if len(self.dataset_info['output_variables']) > 1:
+                initial_values.append('0.00')  # Avg R²
+            
+            # Add remaining summary columns: Training Fidelity, Validation Fidelity, Loss
+            initial_values.extend(['0.00', '0.00', 'N/A'])  # Training, Validation, Loss
             initial_values.append('Waiting')
             
             # Insert row with normal status (black text)
