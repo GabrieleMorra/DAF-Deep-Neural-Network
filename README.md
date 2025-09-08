@@ -109,6 +109,45 @@ python train_single_model.py
 }
 ```
 
+## Optimization Algorithms
+
+The framework supports multiple optimization algorithms:
+
+### Available Optimizers
+- **GradientDescent**: Classic gradient descent with momentum
+- **Adam**: Adaptive moment estimation (default, recommended)
+- **LevenbergMarquardt**: Second-order optimization for improved convergence
+- **GaussNewton**: Gauss-Newton method (placeholder for future implementation)
+
+### Levenberg-Marquardt Optimizer
+The Levenberg-Marquardt (LM) optimizer combines the benefits of gradient descent and Gauss-Newton methods:
+
+**Features:**
+- **Adaptive Strategy**: Automatically switches between gradient descent and Gauss-Newton
+- **Self-tuning**: Damping parameter λ adapts based on training progress
+- **Memory Optimized**: Uses workspace caching and in-place operations
+- **Scalable**: Block-diagonal approximation for large networks (>500 parameters)
+- **Robust Fallbacks**: Multiple numerical stability mechanisms
+
+**When to Use:**
+- Small to medium networks (<1000 parameters)
+- Regression problems requiring high precision
+- When Adam oscillates near convergence
+- Scientific applications requiring stable convergence
+
+**Configuration:**
+```json
+{
+  "UpdateMethod": "LevenbergMarquardt",
+  "learning_rate": 1e-3
+}
+```
+
+**Performance:**
+- Small networks: Full Hessian approximation for optimal convergence
+- Large networks: Block-diagonal approximation for speed
+- Automatic workspace reuse eliminates memory allocation overhead
+
 ## GUI Features
 
 The real-time monitoring interface provides:

@@ -70,7 +70,7 @@ def main():
             print("[ERROR] Training failed or was interrupted")
             
     except KeyboardInterrupt:
-        print("\n[INFO] Training interrupted by user (Ctrl+C)")
+        print("\n[INFO] Training interrupted by user")
         print("[INFO] Exiting...")
         return
     except Exception as e:
@@ -94,5 +94,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[INFO] Program interrupted by user (Ctrl+C)")
+        print("\n[INFO] Program interrupted by user")
         print("[INFO] Exiting...")
