@@ -1344,15 +1344,6 @@ class RealTimeTableGUI:
         # Update dashboard metrics when a model fails
         self.root.after(0, self.update_status)
     
-    def mark_paused_status(self, model_id):
-        """Mark a model as paused in the GUI"""
-        self.model_data[model_id]['gui_paused'] = True
-        self.root.after(0, self.update_table_row, model_id)
-    
-    def mark_training_status(self, model_id):
-        """Mark a model as training in the GUI"""
-        self.model_data[model_id]['gui_paused'] = False
-        self.root.after(0, self.update_table_row, model_id)
     
     def update_table_row(self, model_id):
         """Update a specific row in the table with best epoch values"""
@@ -1362,14 +1353,14 @@ class RealTimeTableGUI:
         data = self.model_data[model_id]
         arch_label = self.model_labels[model_id]
         
-        # Determine status and tag
+        # Determine status and tag - simplified linear logic
         if data['error']:
             status = 'Error'
             tag = 'error'
         elif data['completed']:
             status = 'Completed'
             tag = 'completed'
-        elif data.get('gui_paused', False):
+        elif model_id in self.paused_models:
             status = 'Paused'
             tag = 'paused'
         elif data['current_epoch'] > 0:
@@ -2089,44 +2080,29 @@ class RealTimeTableGUI:
     def pause_model(self, model_id):
         """Pause individual model training"""
         self.paused_models.add(model_id)
-        # Update external pause state for training threads
+        # Update external pause state for processes
         if self.external_pause_state:
-            self.external_pause_state["paused"].add(model_id)
+            paused_list = self.external_pause_state["paused"]
+            if model_id not in paused_list:
+                paused_list.append(model_id)
         print(f"[GUI] Paused training for model {model_id}")
-        
-        # Update visual status
-        if model_id in self.table_items:
-            item = self.table_items[model_id]
-            current_values = list(self.tree.item(item, 'values'))
-            current_values[-1] = 'Paused'
-            self.tree.item(item, values=tuple(current_values), tags=('paused',))
-        
-        # Configure paused tag
-        self.tree.tag_configure('paused', foreground='#ff9800', 
-                               font=('Segoe UI', 10, 'italic'))
+        # Use centralized update function
+        self.update_table_row(model_id)
     
     def resume_model(self, model_id):
         """Resume individual model training"""
         self.paused_models.discard(model_id)
-        # Update external pause state for training threads
+        # Update external pause state for processes
         if self.external_pause_state:
-            self.external_pause_state["paused"].discard(model_id)
+            paused_list = self.external_pause_state["paused"]
+            try:
+                if model_id in paused_list:
+                    paused_list.remove(model_id)
+            except ValueError:
+                pass  # Already removed
         print(f"[GUI] Resumed training for model {model_id}")
-        
-        # Update visual status back to appropriate state
-        data = self.model_data.get(model_id, {})
-        if data.get('epoch', 0) > 0:
-            status = 'Training'
-            tag = 'training'
-        else:
-            status = 'Waiting'
-            tag = 'waiting'
-        
-        if model_id in self.table_items:
-            item = self.table_items[model_id]
-            current_values = list(self.tree.item(item, 'values'))
-            current_values[-1] = status
-            self.tree.item(item, values=tuple(current_values), tags=(tag,))
+        # Use centralized update function
+        self.update_table_row(model_id)
     
     def show_model_info(self, model_id, values):
         """Show detailed model information"""
@@ -2310,47 +2286,37 @@ class RealTimeTableGUI:
                                f"Details:\n{error_details}")
     
     def toggle_pause(self):
-        """Toggle pause/resume state"""
+        """Toggle pause/resume state - simplified"""
         self.is_paused = not self.is_paused
-        
+
         if self.is_paused:
             self.pause_button.config(text="▶ Resume", bg='#4caf50')
             self.status_indicator.config(text="■ Paused", fg='#ff9800')
-            print(f"[GUI] GLOBAL TRAINING PAUSED by user - is_paused = {self.is_paused}")
-            # Mark all training models as paused visually
-            self._update_global_pause_formatting(paused=True)
+            print(f"[GUI] TRAINING PAUSED by user")
+            # Pause all currently training models
+            training_models = self._get_training_models()
+            for model_id in training_models:
+                self.pause_model(model_id)
         else:
             self.pause_button.config(text="■ Pause", bg=self.colors['warning'])
-            print(f"[GUI] GLOBAL TRAINING RESUMED by user - is_paused = {self.is_paused}")
-            # Remove pause formatting from all models
-            self._update_global_pause_formatting(paused=False)
-        
-        # Force update status display (this will set the correct indicator)
+            print(f"[GUI] TRAINING RESUMED by user")
+            # Resume all paused models
+            paused_models = list(self.paused_models)
+            for model_id in paused_models:
+                self.resume_model(model_id)
+
         self.update_status()
-    
-    def _update_global_pause_formatting(self, paused):
-        """Update visual formatting for global pause state"""
-        for model_id, item in self.table_items.items():
-            if model_id in self.model_data:
-                data = self.model_data[model_id]
-                # Only affect models that are not completed and not individually paused
-                if (not data.get('completed', False) and 
-                    model_id not in self.paused_models and 
-                    model_id not in self.deleted_models):
-                    
-                    current_values = list(self.tree.item(item, 'values'))
-                    if paused:
-                        # Mark as globally paused
-                        current_values[-1] = 'Paused (Global)'
-                        self.tree.item(item, values=tuple(current_values), tags=('paused',))
-                    else:
-                        # Restore normal status
-                        if data.get('epoch', 0) > 0:
-                            current_values[-1] = 'Training'
-                            self.tree.item(item, values=tuple(current_values), tags=('training',))
-                        else:
-                            current_values[-1] = 'Waiting'
-                            self.tree.item(item, values=tuple(current_values), tags=())
+
+    def _get_training_models(self):
+        """Get list of models currently in training state"""
+        training_models = []
+        for model_id, data in self.model_data.items():
+            if (data.get('current_epoch', 0) > 0 and
+                not data.get('completed', False) and
+                model_id not in self.deleted_models):
+                training_models.append(model_id)
+        return training_models
+
     
     def open_add_config_window(self):
         """Open window to add new configurations"""

@@ -14,12 +14,12 @@ import numpy as np
 from collections import defaultdict
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from daf_neural_network.gui.realtime_monitor import RealTimeTableGUI
 from daf_neural_network.data.preprocessing import get_database
 from daf_neural_network.core.trainer import TrainNeuralNetwork
 from daf_neural_network.utils.config import load_config, convert_json_format
 from daf_neural_network.utils.helpers import ensure_output_directory
+from daf_neural_network.utils.process_manager import ProcessPoolManager, cleanup_child_processes, setup_process_affinity, create_pause_check_function
 from multiprocessing import Queue, Manager
 from queue import Empty
 import pickle
@@ -114,136 +114,69 @@ def main():
         completed_count = 0
         submitted_jobs = set()  # Track which models have been submitted
         
-        # Create ProcessPoolExecutor for true parallelization (bypasses GIL)
-        executor = ProcessPoolExecutor(max_workers=max_threads)
+        # Create process pool manager
+        process_manager = ProcessPoolManager(max_threads, data_queue, pause_state)
+        executor = process_manager.start()
         training_state["executor"] = executor
-        
+        training_state["process_manager"] = process_manager
+
+        # Add all jobs to the manager
+        process_manager.add_jobs(jobs)
+
+        # Submit initial batch
+        if not process_manager.submit_initial_batch(train_single_architecture):
+            return
+            
         try:
-            # Submit initial jobs with pause state
-            future_to_job = {}
-            for job_id, model_id, arch_config, db in jobs:
-                future = executor.submit(train_single_architecture, job_id, model_id, arch_config, db, data_queue, pause_state)
-                future_to_job[future] = (job_id, model_id)
-                submitted_jobs.add(model_id)
-            
-            print(f"[INFO] Process pool created with {max_threads} worker processes")
-            print(f"[INFO] Each process will be assigned to a dedicated CPU core")
-            print(f"[INFO] Submitted {len(jobs)} initial jobs")
-            
-            # Keep loop running until stop is requested - processes stay alive
-            loop_count = 0
+            # Keep loop running until stop is requested
             while not training_state["stop_requested"]:
-                loop_count += 1
-                
-                # Check for new configurations from queue (thread-safe)
-                new_configs_processed = 0
-                
+
+                # Process dynamic configurations from GUI
                 try:
-                    while True:  # Process all pending configurations
-                        config_tuple = new_config_queue.get(block=False)  # Non-blocking get
-                        new_configs_processed += 1
-                        
+                    while True:
+                        config_tuple = new_config_queue.get(block=False)
+
                         # Convert config back to architecture
                         hidden_neurons = parse_config_tuple(config_tuple)
-                        
-                        # Create architecture config
                         arch_config = create_architecture_config(nn_model_base, hidden_neurons)
                         model_id = get_architecture_id(arch_config)
-                        
-                        # Only submit if not already submitted - threads will pick up the work
-                        if model_id not in submitted_jobs:
-                            job_id = len(submitted_jobs)  # New job ID
-                            future = executor.submit(train_single_architecture, job_id, model_id, arch_config, database, data_queue, pause_state)
-                            future_to_job[future] = (job_id, model_id)
-                            submitted_jobs.add(model_id)
-                            print(f"[INFO] Submitted new training job for {model_id}")
-                        else:
-                            print(f"[WARNING] Skipping duplicate job {model_id}")
-                        
+
+                        # Add dynamic job
+                        job_id = len(submitted_jobs)
+                        new_job = (job_id, model_id, arch_config, database)
+                        process_manager.add_dynamic_job(new_job, train_single_architecture)
+                        submitted_jobs.add(model_id)
+
                 except Empty:
-                    # No more configurations in queue, continue with main loop
-                    pass
-                
-                # Check if stop was requested (GUI closed)
+                    pass  # No more configurations in queue
+
+                # Check if stop was requested
                 if training_state["stop_requested"]:
                     print("[INFO] Stopping remaining training jobs...")
-                    # Cancel remaining futures
-                    for remaining_future in future_to_job:
-                        remaining_future.cancel()
+                    process_manager.request_stop()
                     break
-                
-                # Process completed jobs (with timeout to allow checking for new configs)
-                if future_to_job:
-                    completed_futures = []
-                    for future in list(future_to_job.keys()):
-                        if future.done():
-                            completed_futures.append(future)
-                    
-                    if completed_futures:
-                        for future in completed_futures:
-                            job_id, model_id = future_to_job.pop(future)
-                            completed_count += 1
-                            
-                            try:
-                                result = future.result()
-                                if result is not None:
-                                    results.append((model_id, result))
-                                    print(f"[SUCCESS] [{completed_count}] {model_id} completed successfully")
-                                else:
-                                    print(f"[ERROR] [{completed_count}] {model_id} failed")
-                            except Exception as e:
-                                print(f"[ERROR] [{completed_count}] {model_id} error: {e}")
-                            
-                            # Periodic memory cleanup for completed jobs
-                            if completed_count % 5 == 0:  # Every 5 completed jobs
-                                gc.collect()
-                    
-                    # Brief wait to allow new configurations to be checked
-                    time.sleep(0.1)
-                else:
-                    # No active jobs, but threads are still alive waiting for work
-                    if training_state["stop_requested"]:
-                        break
-                    
-                    # Check if there are items in queue even when no active jobs
-                    if new_config_queue.qsize() > 0:
-                        continue  # Don't sleep, process immediately
-                    
-                    time.sleep(0.5)  # Brief sleep for responsive queue checking
+
+                # Process completed jobs
+                completed_results = process_manager.process_completed_jobs(train_single_architecture)
+                if completed_results:
+                    results.extend(completed_results)
+                    completed_count += len(completed_results)
+
+                    # Periodic memory cleanup
+                    if completed_count % 5 == 0:
+                        gc.collect()
+
+                # Check if all jobs are completed
+                if process_manager.is_complete() and new_config_queue.qsize() == 0:
+                    print(f"[INFO] All jobs completed! Processed {completed_count} total jobs.")
+                    break
+
+                # Brief sleep for responsiveness
+                time.sleep(0.1)
         
         finally:
-            # Forcefully terminate all processes
-            print("[INFO] Forcefully shutting down process pool...")
-            try:
-                # Cancel all pending futures
-                for future in future_to_job:
-                    future.cancel()
-
-                # Shutdown executor aggressively
-                executor.shutdown(wait=False)
-
-                # Force kill any remaining processes after brief wait
-                import time
-                time.sleep(1)
-
-                # Get the process pool processes and terminate them
-                if hasattr(executor, '_processes'):
-                    for p in executor._processes.values():
-                        if p.is_alive():
-                            print(f"[CLEANUP] Terminating process PID {p.pid}")
-                            p.terminate()
-
-                    # Wait briefly then kill if still alive
-                    time.sleep(0.5)
-                    for p in executor._processes.values():
-                        if p.is_alive():
-                            print(f"[CLEANUP] Force killing process PID {p.pid}")
-                            p.kill()
-
-            except Exception as e:
-                print(f"[WARNING] Error during process cleanup: {e}")
-
-            print("[INFO] Process pool cleanup completed")
+            # Use process manager for clean shutdown
+            process_manager.force_shutdown()
         
         training_state["results"] = results
         training_state["completed"] = True
@@ -288,34 +221,11 @@ def main():
         except Exception as e:
             print(f"[WARNING] Error stopping data collection: {e}")
 
-        # Force shutdown executor immediately
-        if training_state.get("executor"):
-            executor = training_state["executor"]
+        # Force shutdown process manager immediately
+        if training_state.get("process_manager"):
+            process_manager = training_state["process_manager"]
             print("[INFO] Force terminating process pool from GUI close...")
-
-            try:
-                # Cancel all running tasks
-                for future in list(executor._futures.keys()) if hasattr(executor, '_futures') else []:
-                    future.cancel()
-
-                # Shutdown without waiting
-                executor.shutdown(wait=False)
-
-                # Kill processes aggressively
-                if hasattr(executor, '_processes'):
-                    import psutil
-                    for p in executor._processes.values():
-                        try:
-                            if p.is_alive():
-                                # Use psutil for more aggressive termination
-                                psutil_proc = psutil.Process(p.pid)
-                                psutil_proc.terminate()
-                                print(f"[CLEANUP] Terminated process PID {p.pid}")
-                        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
-                            pass
-
-            except Exception as e:
-                print(f"[WARNING] Error during GUI close cleanup: {e}")
+            process_manager.force_shutdown()
 
         # Brief wait then destroy GUI
         time.sleep(0.5)
@@ -343,33 +253,8 @@ def main():
         else:
             print("[INFO] Training thread stopped successfully")
 
-        # Final cleanup: kill any remaining python processes from this session
-        print("[INFO] Final cleanup - checking for remaining processes...")
-        try:
-            import psutil
-            current_pid = os.getpid()
-            parent = psutil.Process(current_pid)
-
-            # Kill all child processes
-            for child in parent.children(recursive=True):
-                try:
-                    print(f"[CLEANUP] Terminating child process PID {child.pid}")
-                    child.terminate()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-
-            # Wait briefly then force kill if needed
-            time.sleep(1)
-            for child in parent.children(recursive=True):
-                try:
-                    if child.is_running():
-                        print(f"[CLEANUP] Force killing child process PID {child.pid}")
-                        child.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-
-        except Exception as e:
-            print(f"[WARNING] Error during final cleanup: {e}")
+        # Final cleanup using utility function
+        cleanup_child_processes()
 
         print("[INFO] Shutdown complete.")
         # Force exit to ensure all processes are terminated
@@ -486,47 +371,14 @@ def get_architecture_id(config):
     neurons = [str(config[layer]["output_dim"]) for layer in sorted(layers)]
     return "x".join(neurons)
 
-def train_single_architecture(job_id, model_id, arch_config, database, data_queue, pause_state=None, gui_ref=None):
+def train_single_architecture(job_id, model_id, arch_config, database, data_queue, pause_state=None):
     """Train a single architecture with dedicated CPU core assignment"""
     try:
-        # Set CPU affinity using psutil for cross-platform support
-        process = psutil.Process()
-        available_cpus = list(range(psutil.cpu_count()))
-        
-        if available_cpus:
-            # Assign each process to a dedicated CPU core
-            assigned_cpu = available_cpus[job_id % len(available_cpus)]
-            try:
-                process.cpu_affinity([assigned_cpu])
-                print(f"[CPU] Process {model_id} assigned to CPU core {assigned_cpu}")
-            except (OSError, AttributeError) as e:
-                print(f"[WARNING] Could not set CPU affinity for {model_id}: {e}")
-        
-        # Set process priority to high for better performance
-        try:
-            if hasattr(psutil, 'HIGH_PRIORITY_CLASS'):
-                process.nice(psutil.HIGH_PRIORITY_CLASS)
-            else:
-                process.nice(-5)  # Unix-like systems
-        except (OSError, AttributeError):
-            pass  # Continue without priority adjustment
-        
-        # Create pause check function for multiprocessing
-        def pause_check():
-            if pause_state is None:
-                return None  # No pause control
-            
-            # Note: GUI reference doesn't work across processes, so skip global pause check
-            
-            # Check if this model is deleted (convert to list for multiprocessing compatibility)
-            if model_id in list(pause_state.get('deleted', [])):
-                return True  # True = deleted
-            
-            # Check if this model is paused (convert to list for multiprocessing compatibility)
-            if model_id in list(pause_state.get('paused', [])):
-                return False  # False = paused
-            
-            return None  # None = continue training
+        # Set up CPU affinity and process priority
+        setup_process_affinity(job_id)
+
+        # Create pause check function
+        pause_check = create_pause_check_function(pause_state, model_id)
         
         # Train the model with pause check
         result = TrainNeuralNetwork(
