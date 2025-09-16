@@ -212,10 +212,38 @@ def main():
                     time.sleep(0.5)  # Brief sleep for responsive queue checking
         
         finally:
-            # Only shutdown executor when explicitly stopping
-            print("[INFO] Shutting down thread pool...")
-            executor.shutdown(wait=False)  # Don't wait for running tasks to complete
-            print("[INFO] Thread pool shutdown initiated")
+            # Forcefully terminate all processes
+            print("[INFO] Forcefully shutting down process pool...")
+            try:
+                # Cancel all pending futures
+                for future in future_to_job:
+                    future.cancel()
+
+                # Shutdown executor aggressively
+                executor.shutdown(wait=False)
+
+                # Force kill any remaining processes after brief wait
+                import time
+                time.sleep(1)
+
+                # Get the process pool processes and terminate them
+                if hasattr(executor, '_processes'):
+                    for p in executor._processes.values():
+                        if p.is_alive():
+                            print(f"[CLEANUP] Terminating process PID {p.pid}")
+                            p.terminate()
+
+                    # Wait briefly then kill if still alive
+                    time.sleep(0.5)
+                    for p in executor._processes.values():
+                        if p.is_alive():
+                            print(f"[CLEANUP] Force killing process PID {p.pid}")
+                            p.kill()
+
+            except Exception as e:
+                print(f"[WARNING] Error during process cleanup: {e}")
+
+            print("[INFO] Process pool cleanup completed")
         
         training_state["results"] = results
         training_state["completed"] = True
@@ -249,21 +277,52 @@ def main():
     
     # Set up GUI close handler
     def on_closing():
-        """Handle GUI window close"""
-        print("[INFO] Closing GUI, stopping all threads...")
+        """Handle GUI window close with proper process cleanup"""
+        print("[INFO] Closing GUI, stopping all processes...")
         training_state["stop_requested"] = True
-        
+
         # Stop data collection thread
         try:
-            # Signal GUI to stop data collection
             if hasattr(gui, 'stop_data_collection'):
                 gui.stop_data_collection()
         except Exception as e:
             print(f"[WARNING] Error stopping data collection: {e}")
-        
-        # Brief wait for threads to stop
-        time.sleep(0.2)
-        gui.root.destroy()
+
+        # Force shutdown executor immediately
+        if training_state.get("executor"):
+            executor = training_state["executor"]
+            print("[INFO] Force terminating process pool from GUI close...")
+
+            try:
+                # Cancel all running tasks
+                for future in list(executor._futures.keys()) if hasattr(executor, '_futures') else []:
+                    future.cancel()
+
+                # Shutdown without waiting
+                executor.shutdown(wait=False)
+
+                # Kill processes aggressively
+                if hasattr(executor, '_processes'):
+                    import psutil
+                    for p in executor._processes.values():
+                        try:
+                            if p.is_alive():
+                                # Use psutil for more aggressive termination
+                                psutil_proc = psutil.Process(p.pid)
+                                psutil_proc.terminate()
+                                print(f"[CLEANUP] Terminated process PID {p.pid}")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                            pass
+
+            except Exception as e:
+                print(f"[WARNING] Error during GUI close cleanup: {e}")
+
+        # Brief wait then destroy GUI
+        time.sleep(0.5)
+        try:
+            gui.root.destroy()
+        except:
+            pass
     
     gui.root.protocol("WM_DELETE_WINDOW", on_closing)
     
@@ -283,8 +342,37 @@ def main():
             print("[WARNING] Training thread did not stop gracefully, forcing exit")
         else:
             print("[INFO] Training thread stopped successfully")
+
+        # Final cleanup: kill any remaining python processes from this session
+        print("[INFO] Final cleanup - checking for remaining processes...")
+        try:
+            import psutil
+            current_pid = os.getpid()
+            parent = psutil.Process(current_pid)
+
+            # Kill all child processes
+            for child in parent.children(recursive=True):
+                try:
+                    print(f"[CLEANUP] Terminating child process PID {child.pid}")
+                    child.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            # Wait briefly then force kill if needed
+            time.sleep(1)
+            for child in parent.children(recursive=True):
+                try:
+                    if child.is_running():
+                        print(f"[CLEANUP] Force killing child process PID {child.pid}")
+                        child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+        except Exception as e:
+            print(f"[WARNING] Error during final cleanup: {e}")
+
         print("[INFO] Shutdown complete.")
-        # Force exit to ensure all threads are terminated
+        # Force exit to ensure all processes are terminated
         os._exit(0)
 
 def parse_config_tuple(config_tuple):
