@@ -190,6 +190,19 @@ def cleanup_child_processes():
         # Suppress queue cleanup errors that are normal during forced shutdown
         warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing")
 
+        # Also suppress stderr output for queue errors during shutdown
+        try:
+            import sys
+            import os
+            # Redirect stderr to null to hide queue cleanup errors
+            original_stderr = sys.stderr
+            sys.stderr = open(os.devnull, 'w')
+            time.sleep(0.1)  # Brief delay for any remaining output
+            sys.stderr.close()
+            sys.stderr = original_stderr
+        except:
+            pass
+
     except Exception as e:
         print(f"[WARNING] Error during final cleanup: {e}")
 
