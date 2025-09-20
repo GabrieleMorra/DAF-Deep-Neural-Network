@@ -10,7 +10,25 @@ def check(file_path, verbose=True):
         print("ONNX ONNX found successfully.\n")
 
 def read(file_path):
-    return onnx.load(file_path), ort.InferenceSession(file_path)
+    # Load ONNX model
+    model = onnx.load(file_path)
+
+    # Create ONNX Runtime session with optimized configuration
+    session_options = ort.SessionOptions()
+    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+
+    # Use only CPU provider with specific configuration
+    providers = ['CPUExecutionProvider']
+    provider_options = [{'arena_extend_strategy': 'kSameAsRequested'}]
+
+    session = ort.InferenceSession(
+        file_path,
+        sess_options=session_options,
+        providers=providers,
+        provider_options=provider_options
+    )
+
+    return model, session
 
 def get_input_output_variables(model, session):
 

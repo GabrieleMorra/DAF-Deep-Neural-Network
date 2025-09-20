@@ -55,13 +55,23 @@ class ProcessPoolManager:
 
         initial_batch_size = min(self.max_workers, len(self.jobs_queue))
 
-        for i in range(initial_batch_size):
+        submitted_count = 0
+        while submitted_count < initial_batch_size and self.jobs_queue:
             job_data = self.jobs_queue.pop(0)
+            model_id = job_data[1]
+
+            # Check if this job was deleted
+            if self.pause_state and model_id in list(self.pause_state.get('deleted', [])):
+                print(f"[INFO] Skipping deleted job {model_id} in initial batch")
+                continue  # Skip this job and try the next one
+
+            # Submit the job if not deleted
             future = self.executor.submit(worker_function, *job_data, self.data_queue, self.pause_state)
             self.future_to_job[future] = job_data[:2]  # (job_id, model_id)
             self.submitted_jobs.add(job_data[1])  # model_id
+            submitted_count += 1
 
-        print(f"[INFO] Submitted {initial_batch_size} initial jobs, {len(self.jobs_queue)} jobs remaining")
+        print(f"[INFO] Submitted {submitted_count} initial jobs, {len(self.jobs_queue)} jobs remaining")
         return True
 
     def process_completed_jobs(self, worker_function):
@@ -86,12 +96,21 @@ class ProcessPoolManager:
                 print(f"[ERROR] {model_id} error: {e}")
 
             # Submit next job if available
-            if self.jobs_queue:
+            while self.jobs_queue:
                 next_job_data = self.jobs_queue.pop(0)
+                next_model_id = next_job_data[1]
+
+                # Check if this job was deleted
+                if self.pause_state and next_model_id in list(self.pause_state.get('deleted', [])):
+                    print(f"[INFO] Skipping deleted job {next_model_id}, {len(self.jobs_queue)} jobs remaining")
+                    continue  # Skip this job and try the next one
+
+                # Submit the job if not deleted
                 next_future = self.executor.submit(worker_function, *next_job_data, self.data_queue, self.pause_state)
                 self.future_to_job[next_future] = next_job_data[:2]
                 self.submitted_jobs.add(next_job_data[1])
                 print(f"[INFO] Submitted next job {next_job_data[1]}, {len(self.jobs_queue)} jobs remaining")
+                break  # Only submit one job per completion
 
         return results
 
@@ -143,16 +162,16 @@ class ProcessPoolManager:
             time.sleep(1)
 
             # Get the process pool processes and terminate them
-            if hasattr(self.executor, '_processes'):
+            if hasattr(self.executor, '_processes') and self.executor._processes is not None:
                 for p in self.executor._processes.values():
-                    if p.is_alive():
+                    if p and p.is_alive():
                         print(f"[CLEANUP] Terminating process PID {p.pid}")
                         p.terminate()
 
                 # Wait briefly then kill if still alive
                 time.sleep(0.5)
                 for p in self.executor._processes.values():
-                    if p.is_alive():
+                    if p and p.is_alive():
                         print(f"[CLEANUP] Force killing process PID {p.pid}")
                         p.kill()
 
@@ -165,6 +184,21 @@ class ProcessPoolManager:
 def cleanup_child_processes():
     """Final cleanup: kill any remaining python processes from this session"""
     print("[INFO] Final cleanup - checking for remaining processes...")
+
+    # Suppress all multiprocessing warnings/errors early
+    warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing")
+    warnings.filterwarnings("ignore", category=UserWarning, module="queue")
+
+    # Redirect stderr to suppress connection errors during cleanup
+    original_stderr = None
+    try:
+        import sys
+        original_stderr = sys.stderr
+        null_device = os.devnull
+        sys.stderr = open(null_device, 'w')
+    except Exception:
+        pass  # If redirection fails, continue with normal stderr
+
     try:
         current_pid = os.getpid()
         parent = psutil.Process(current_pid)
@@ -172,7 +206,7 @@ def cleanup_child_processes():
         # Kill all child processes
         for child in parent.children(recursive=True):
             try:
-                print(f"[CLEANUP] Terminating child process PID {child.pid}")
+                print(f"[CLEANUP] Terminating child process PID {child.pid}", file=original_stderr if original_stderr else sys.stdout)
                 child.terminate()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -182,29 +216,24 @@ def cleanup_child_processes():
         for child in parent.children(recursive=True):
             try:
                 if child.is_running():
-                    print(f"[CLEANUP] Force killing child process PID {child.pid}")
+                    print(f"[CLEANUP] Force killing child process PID {child.pid}", file=original_stderr if original_stderr else sys.stdout)
                     child.kill()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-        # Suppress queue cleanup errors that are normal during forced shutdown
-        warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing")
-
-        # Also suppress stderr output for queue errors during shutdown
-        try:
-            import sys
-            import os
-            # Redirect stderr to null to hide queue cleanup errors
-            original_stderr = sys.stderr
-            sys.stderr = open(os.devnull, 'w')
-            time.sleep(0.1)  # Brief delay for any remaining output
-            sys.stderr.close()
-            sys.stderr = original_stderr
-        except:
-            pass
+        # Give time for all cleanup errors to occur while stderr is suppressed
+        time.sleep(2)
 
     except Exception as e:
         print(f"[WARNING] Error during final cleanup: {e}")
+    finally:
+        # Restore stderr
+        if original_stderr is not None:
+            try:
+                sys.stderr.close()
+                sys.stderr = original_stderr
+            except:
+                pass
 
 
 def setup_process_affinity(job_id):

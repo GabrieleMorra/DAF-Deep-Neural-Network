@@ -5,7 +5,6 @@ Console-based training script for single neural network models
 """
 
 from daf_neural_network.core.trainer import TrainNeuralNetwork
-from daf_neural_network.visualization.scientific_plots import visualize_NN_results
 from daf_neural_network.data.preprocessing import get_database
 from daf_neural_network.utils.config import load_config, convert_json_format
 from daf_neural_network.utils.helpers import ensure_output_directory
@@ -45,6 +44,7 @@ def main():
         return
 
     # Extract dataset name for automatic naming
+    import os
     input_filename = nnModel["NeuralNetworkModel"]["InputFileName"]
     dataset_name = os.path.splitext(os.path.basename(input_filename))[0]
     output_file = f"data/output/Trained_DNN_{dataset_name}"
@@ -63,9 +63,37 @@ def main():
             print(f"[INFO] Model saved in: {session_dir}/")
             
             print("\n[INFO] Generating comprehensive visualizations...")
-            viz_dir = f"{session_dir}/visualizations"
-            visualize_NN_results(output_dir=viz_dir)
-            print(f"[SUCCESS] Visualizations saved in {viz_dir}/")
+
+            # 1. Generate scientific plots
+            try:
+                from daf_neural_network.visualization.scientific_plots import visualize_NN_results
+                visualize_NN_results(session_dir=session_dir)
+                print(f"[SUCCESS] Scientific plots saved in {session_dir}/")
+            except Exception as viz_error:
+                print(f"[WARNING] Scientific plots failed: {viz_error}")
+                print("         This may be due to missing dependencies or data issues")
+
+            # 2. Generate architecture visualization
+            try:
+                from daf_neural_network.visualization.DNN_architecture import visualize_architecture
+
+                # Find ONNX file in session directory
+                onnx_file = None
+                for file in os.listdir(session_dir):
+                    if file.endswith('.onnx'):
+                        onnx_file = os.path.join(session_dir, file)
+                        break
+
+                if onnx_file and os.path.exists(onnx_file):
+                    output_path = os.path.join(session_dir, "network_architecture.svg")
+                    if visualize_architecture(onnx_file, output_path):
+                        print(f"[SUCCESS] Architecture visualization saved in {session_dir}/")
+                    else:
+                        print(f"[WARNING] Architecture visualization failed")
+                else:
+                    print(f"[WARNING] ONNX file not found for architecture visualization")
+            except Exception as arch_error:
+                print(f"[WARNING] Architecture visualization failed: {arch_error}")
         else:
             print("[ERROR] Training failed or was interrupted")
             
@@ -82,8 +110,14 @@ def main():
                 print(f"[SUCCESS] Loaded existing trained model from '{output_file}.pkl'")
                 
                 print("\n[INFO] Generating visualizations from existing model...")
-                visualize_NN_results(output_dir="data/output/visualizations")
-                print("[SUCCESS] Visualizations completed")
+                try:
+                    from daf_neural_network.visualization.scientific_plots import visualize_NN_results
+                    # Use same directory as PKL/ONNX files (no output_dir specified)
+                    visualize_NN_results(session_dir="data/output")
+                    print("[SUCCESS] Visualizations completed")
+                except Exception as viz_error:
+                    print(f"[WARNING] Visualization failed: {viz_error}")
+                    print("[INFO] Model loaded successfully, but visualizations could not be generated")
         except FileNotFoundError:
             print(f"[ERROR] No existing model found at '{output_file}.pkl'")
             print("Please check the configuration and try again.")

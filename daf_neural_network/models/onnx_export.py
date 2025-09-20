@@ -22,6 +22,23 @@ def save_onnx(nn, database, params_values, network_layers, input_shape, output_f
     # Get indices for input and output
     input_indices = nn["NeuralNetworkModel"]["inputEntryIndices"]
     output_indices = nn["NeuralNetworkModel"]["outputEntryIndices"]
+
+    # Read variable names from CSV file
+    csv_filename = nn["NeuralNetworkModel"]["InputFileName"]
+    csv_path = f"data/input/{csv_filename}"
+    delimiter = nn["NeuralNetworkModel"].get("Delimiter", ",")
+
+    variable_names = []
+    try:
+        import csv
+        with open(csv_path, 'r') as csvfile:
+            reader = csv.reader(csvfile, delimiter=delimiter)
+            headers = next(reader)  # Read first row (headers)
+            variable_names = headers
+    except Exception as e:
+        print(f"Warning: Could not read variable names from {csv_path}: {e}")
+        # Fallback to generic names
+        variable_names = [f"input_{i}" for i in range(len(input_indices) + len(output_indices))]
     
     # Get min/max values for normalization (same values used during training)
     min_data = database['min_data']
@@ -37,8 +54,16 @@ def save_onnx(nn, database, params_values, network_layers, input_shape, output_f
     input_range = input_max - input_min
     output_range = output_max - output_min
     
-    # Define the input tensor (raw, unnormalized)
-    input_tensor = helper.make_tensor_value_info('raw_input', TensorProto.FLOAT, input_shape)
+    # Define input and output names with consistent naming scheme
+    input_var_names = [variable_names[i] for i in input_indices]
+    output_var_names = [variable_names[i] for i in output_indices]
+
+    # Always use descriptive names regardless of count
+    input_name = "_".join(input_var_names) if len(input_var_names) <= 8 else f"inputs_{len(input_var_names)}_vars"
+    final_output_name = "_".join(output_var_names) if len(output_var_names) <= 10 else f"outputs_{len(output_var_names)}_vars"
+
+    # Define the input tensor
+    input_tensor = helper.make_tensor_value_info(input_name, TensorProto.FLOAT, input_shape)
     inputs.append(input_tensor)
 
     # Add normalization constants as initializers (only the ones we actually use)
@@ -49,10 +74,10 @@ def save_onnx(nn, database, params_values, network_layers, input_shape, output_f
     initializers.append(helper.make_tensor('output_range', TensorProto.FLOAT, output_range.shape, output_range.flatten()))
 
     # INPUT NORMALIZATION: (data - min_data) / (max_data - min_data)
-    # Step 1: Subtract min from raw input
+    # Step 1: Subtract min from input
     sub_node = helper.make_node(
         'Sub',
-        ['raw_input', 'input_min'],
+        [input_name, 'input_min'],
         ['input_sub_min'],
         name='input_subtract_min'
     )
@@ -147,13 +172,13 @@ def save_onnx(nn, database, params_values, network_layers, input_shape, output_f
     add_min_node = helper.make_node(
         'Add',
         ['output_mul_range', 'output_min'],
-        ['final_output'],
+        [final_output_name],
         name='output_add_min'
     )
     nodes.append(add_min_node)
 
-    # Define the output tensor (raw, denormalized)
-    output_tensor = helper.make_tensor_value_info('final_output', TensorProto.FLOAT, [None, len(output_indices)])
+    # Define the output tensor
+    output_tensor = helper.make_tensor_value_info(final_output_name, TensorProto.FLOAT, [None, len(output_indices)])
     outputs.append(output_tensor)
 
     # Create the graph

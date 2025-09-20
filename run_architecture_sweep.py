@@ -136,6 +136,14 @@ def main():
                     while True:
                         config_tuple = new_config_queue.get(block=False)
 
+                        # Recreate process pool if it was shut down
+                        if process_manager is None:
+                            print(f"[INFO] New configuration received. Recreating process pool...")
+                            process_manager = ProcessPoolManager(max_threads, data_queue, pause_state)
+                            executor = process_manager.start()
+                            training_state["executor"] = executor
+                            training_state["process_manager"] = process_manager
+
                         # Convert config back to architecture
                         hidden_neurons = parse_config_tuple(config_tuple)
                         arch_config = create_architecture_config(nn_model_base, hidden_neurons)
@@ -153,23 +161,51 @@ def main():
                 # Check if stop was requested
                 if training_state["stop_requested"]:
                     print("[INFO] Stopping remaining training jobs...")
-                    process_manager.request_stop()
+                    if process_manager is not None:
+                        process_manager.request_stop()
                     break
 
-                # Process completed jobs
-                completed_results = process_manager.process_completed_jobs(train_single_architecture)
-                if completed_results:
-                    results.extend(completed_results)
-                    completed_count += len(completed_results)
+                # Process completed jobs (only if process manager exists)
+                if process_manager is not None:
+                    completed_results = process_manager.process_completed_jobs(train_single_architecture)
+                    if completed_results:
+                        results.extend(completed_results)
+                        completed_count += len(completed_results)
 
-                    # Periodic memory cleanup
-                    if completed_count % 5 == 0:
+                        # Periodic memory cleanup
+                        if completed_count % 5 == 0:
+                            gc.collect()
+
+                # Check if all initial jobs are completed (but keep running for new configurations)
+                if process_manager is not None and process_manager.is_complete() and new_config_queue.qsize() == 0:
+                    # All current jobs are done, but keep loop running for new configurations
+                    # Only print this message once when we first reach 100%
+                    if not training_state.get("pool_shutdown_completed", False):
+                        print(f"[INFO] All jobs completed! Processed {completed_count} total jobs.")
+                        print(f"[INFO] Cleaning up completed processes to free memory...")
+
+                        # Clean up completed processes to free memory
+                        print(f"[INFO] Shutting down process pool to free memory...")
+                        process_manager.force_shutdown()
+
+                        # Wait longer for processes to actually terminate
+                        time.sleep(2.0)
+
+                        # Force garbage collection multiple times to free memory
                         gc.collect()
+                        gc.collect()  # Call twice for better cleanup
+                        time.sleep(1.0)  # Give more time for OS cleanup
 
-                # Check if all jobs are completed
-                if process_manager.is_complete() and new_config_queue.qsize() == 0:
-                    print(f"[INFO] All jobs completed! Processed {completed_count} total jobs.")
-                    break
+                        # Only recreate when we actually have new jobs to process
+                        # This avoids keeping unnecessary processes alive
+                        process_manager = None
+                        training_state["executor"] = None
+                        training_state["process_manager"] = None
+
+                        print(f"[INFO] Process pool shut down completely. Will recreate when new jobs arrive.")
+                        # Set a flag to prevent repeated shutdowns (but don't set it on process_manager since it's None)
+                        training_state["pool_shutdown_completed"] = True
+                    # Don't break - keep loop running for new configurations
 
                 # Brief sleep for responsiveness
                 time.sleep(0.1)
@@ -222,10 +258,13 @@ def main():
             print(f"[WARNING] Error stopping data collection: {e}")
 
         # Force shutdown process manager immediately
-        if training_state.get("process_manager"):
-            process_manager = training_state["process_manager"]
+        process_manager = training_state.get("process_manager")
+        if process_manager is not None:
             print("[INFO] Force terminating process pool from GUI close...")
-            process_manager.force_shutdown()
+            try:
+                process_manager.force_shutdown()
+            except Exception as e:
+                print(f"[WARNING] Error during process manager shutdown: {e}")
 
         # Brief wait then destroy GUI
         time.sleep(0.5)

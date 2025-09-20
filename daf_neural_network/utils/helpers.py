@@ -3,7 +3,6 @@ import os
 def ensure_output_directory():
     """Ensure output directory exists"""
     os.makedirs("data/output", exist_ok=True)
-    os.makedirs("data/output/visualizations", exist_ok=True)
 
 def get_output_filename(nn):
     """Generate output filename based on dataset name"""

@@ -32,7 +32,7 @@ def get_database(nn):
     if data is None:
         raise FileNotFoundError(f"Could not find input file {input_file} in any expected location")
     
-    headers    = data.columns
+    headers    = list(data.columns)
     data       = np.array(data)
     
     # Check for NaN values and report their locations

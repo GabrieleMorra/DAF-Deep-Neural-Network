@@ -79,7 +79,8 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode
     headers             = database['headers']
     ShowEvery           = nn["NeuralNetworkModel"]['ShowTestEvery']
     
-    network_layers = dict(islice(nn.items(), 1, None))
+    # Extract only layer definitions, excluding NeuralNetworkModel and Visualizations
+    network_layers = {k: v for k, v in nn.items() if "Layer" in k}
 
     params_values, previous_grads_values    = init_layers(network_layers, seed = 1)
     loss_history                            = []
@@ -226,7 +227,7 @@ def TrainNeuralNetwork(nn, database, model_id=None, data_queue=None, silent_mode
         f"Mean train loss        : {train_loss:.2E}\n"
         f"Mean test loss         : {validation_loss:.2E}\n"
         f"Elapsed time           : {elapsed_time}\n"
-        f"R² score per variable  :\n" + "\n".join(f"\t{header}: {acc:.2f}%" for header, acc in zip(database['headers'][outputEntryIndices], accuracy_per_variable)) + "\n"
+        f"R² score per variable  :\n" + "\n".join(f"\t{database['headers'][i]}: {acc:.2f}%" for i, acc in zip(outputEntryIndices, accuracy_per_variable)) + "\n"
         "\n"
         "Training process completed"
         )

@@ -23,13 +23,15 @@ import shap
 from ..core.forward_propagation import full_forward_propagation
 from ..models.onnx_inference import infere, read, check
 
-def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_names=None):
+
+def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_names=None, session_dir=None):
     """
     Generate high-quality scientific visualizations for neural network training results.
-    Creates only two essential plots suitable for Q1 journal publications:
+    Creates comprehensive plots suitable for Q1 journal publications:
     1. Training convergence analysis (error history)
     2. SHAP analysis for model interpretability
-    
+    3. Neural network architecture visualization (using ONNX/Netron)
+
     Parameters:
     -----------
     pkl_file : str, optional
@@ -39,19 +41,33 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     latex_var_names : dict, optional
         Dictionary mapping variable names to LaTeX formatted names
         Example: {'Mach': r'$M_{\infty}$', 'Alpha': r'$\alpha$', 'Cl': r'$C_L$'}
+    session_dir : str, optional
+        Session directory containing the trained model files
     """
-    
+
+    # Use session_dir as output_dir if provided (save visualizations with model files)
+    if session_dir and output_dir == "visualizations":
+        output_dir = session_dir
+        print(f"Using session directory for visualizations: {output_dir}")
+
     # Find and load PKL file for basic data
     if pkl_file is None:
-        trained_pkl_files = [f for f in os.listdir('.') if f.startswith('Trained_DNN_') and f.endswith('.pkl')]
+        # Determine search directory
+        search_dir = session_dir if session_dir else '.'
+
+        if not os.path.exists(search_dir):
+            print(f"ERROR: Search directory {search_dir} not found!")
+            return False
+
+        trained_pkl_files = [f for f in os.listdir(search_dir) if f.startswith('Trained_DNN_') and f.endswith('.pkl')]
         if trained_pkl_files:
-            pkl_file = max(trained_pkl_files, key=os.path.getmtime)
+            pkl_file = max([os.path.join(search_dir, f) for f in trained_pkl_files], key=os.path.getmtime)
         else:
-            pkl_files = [f for f in os.listdir('.') if f.endswith('.pkl')]
+            pkl_files = [f for f in os.listdir(search_dir) if f.endswith('.pkl')]
             if not pkl_files:
-                print("ERROR: No PKL files found! Train a model first.")
+                print(f"ERROR: No PKL files found in {search_dir}! Train a model first.")
                 return False
-            pkl_file = max(pkl_files, key=os.path.getmtime)
+            pkl_file = max([os.path.join(search_dir, f) for f in pkl_files], key=os.path.getmtime)
     
     if not os.path.exists(pkl_file):
         print(f"ERROR: PKL file {pkl_file} not found!")
@@ -70,6 +86,11 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     nn = stored_data['nn']
     min_data = stored_data.get('min_data', None)
     max_data = stored_data.get('max_data', None)
+
+    # Get visualization settings from configuration
+    viz_config = nn.get("Visualizations", {})
+    enable_shap = viz_config.get("enable_shap_analysis", True)  # Default True for backward compatibility
+    shap_max_samples = viz_config.get("shap_max_samples", 500)
     
     # Load ORIGINAL DIMENSIONAL DATA from CSV file specified in JSON
     input_filename = nn["NeuralNetworkModel"]["InputFileName"]
@@ -78,8 +99,28 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     output_indices = nn["NeuralNetworkModel"]["outputEntryIndices"]
     
     if not os.path.exists(input_filename):
-        print(f"ERROR: Input data file {input_filename} not found!")
-        return False
+        # Try common search paths for the input file
+        search_paths = [
+            input_filename,
+            f"data/input/{os.path.basename(input_filename)}",
+            f"data/{os.path.basename(input_filename)}",
+            os.path.basename(input_filename)
+        ]
+
+        found_file = None
+        for path in search_paths:
+            if os.path.exists(path):
+                found_file = path
+                break
+
+        if found_file is None:
+            print(f"ERROR: Input data file not found! Searched:")
+            for path in search_paths:
+                print(f"  - {path}")
+            return False
+
+        input_filename = found_file
+        print(f"Found input data file at: {input_filename}")
     
     # Load original CSV data
     import pandas as pd
@@ -111,10 +152,13 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     # Find corresponding ONNX file
     pkl_basename = os.path.splitext(pkl_file)[0]
     onnx_file = f"{pkl_basename}.onnx"
-    
+
     if not os.path.exists(onnx_file):
         print(f"ERROR: ONNX file {onnx_file} not found!")
-        print("Available files:", [f for f in os.listdir('.') if f.endswith('.onnx')])
+        # Check in session_dir if available
+        search_dir = session_dir if session_dir else '.'
+        onnx_files = [f for f in os.listdir(search_dir) if f.endswith('.onnx')]
+        print(f"Available ONNX files in {search_dir}:", onnx_files)
         return False
     
     print(f"Loading ONNX model from: {onnx_file}")
@@ -124,43 +168,53 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     onnx_session = None
     try:
         check(onnx_file, verbose=False)
-        model, onnx_session = read(onnx_file)
-        
-        print(f"Successfully loaded ONNX model (handles normalization internally)")
-        
-        # Calculate predictions using existing infere function with original dimensional data
-        Y_hat_train = []
-        Y_hat_valid = []
-        
-        print(f"Computing training predictions with ONNX...")
-        for i, x_sample in enumerate(X_train):
-            prediction = infere(x_sample, onnx_session)
-            Y_hat_train.append(prediction)
-            if i % 1000 == 0 and i > 0:
-                print(f"  Processed {i}/{len(X_train)} training samples")
-        
-        print(f"Computing validation predictions with ONNX...")
-        for i, x_sample in enumerate(X_valid):
-            prediction = infere(x_sample, onnx_session)
-            Y_hat_valid.append(prediction)
-            if i % 1000 == 0 and i > 0:
-                print(f"  Processed {i}/{len(X_valid)} validation samples")
-        
-        Y_hat_train = np.array(Y_hat_train)
-        Y_hat_valid = np.array(Y_hat_valid)
-        
-        print(f"Successfully calculated ONNX predictions (dimensional values)")
-        print(f"   Training predictions shape: {Y_hat_train.shape}")
-        print(f"   Validation predictions shape: {Y_hat_valid.shape}")
-        
+        print(f"ONNX file check passed")
+
+        # Load ONNX model for SHAP analysis
+        try:
+            model, onnx_session = read(onnx_file)
+            print(f"Successfully loaded ONNX model (handles normalization internally)")
+        except Exception as onnx_load_error:
+            print(f"WARNING: ONNX Runtime failed to load model: {onnx_load_error}")
+            print(f"         Continuing without ONNX support - SHAP analysis will be skipped")
+            onnx_session = None
+
+        if onnx_session is not None:
+            # Calculate predictions using existing infere function with original dimensional data
+            Y_hat_train = []
+            Y_hat_valid = []
+
+            print(f"Computing training predictions with ONNX...")
+            for i, x_sample in enumerate(X_train):
+                prediction = infere(x_sample, onnx_session)
+                Y_hat_train.append(prediction)
+                if i % 1000 == 0 and i > 0:
+                    print(f"  Processed {i}/{len(X_train)} training samples")
+
+            print(f"Computing validation predictions with ONNX...")
+            for i, x_sample in enumerate(X_valid):
+                prediction = infere(x_sample, onnx_session)
+                Y_hat_valid.append(prediction)
+                if i % 1000 == 0 and i > 0:
+                    print(f"  Processed {i}/{len(X_valid)} validation samples")
+
+            Y_hat_train = np.array(Y_hat_train)
+            Y_hat_valid = np.array(Y_hat_valid)
+
+            print(f"Successfully calculated ONNX predictions (dimensional values)")
+            print(f"   Training predictions shape: {Y_hat_train.shape}")
+            print(f"   Validation predictions shape: {Y_hat_valid.shape}")
+
     except Exception as e:
-        print(f"ERROR: Failed to load ONNX model: {e}")
-        print("Cannot compute SHAP analysis without proper model")
-        return False
-    
+        print(f"ERROR: Failed to check ONNX file: {e}")
+        print("Continuing without ONNX support - SHAP analysis will be skipped")
+        onnx_session = None
+
     if onnx_session is None:
-        print("ERROR: ONNX session not initialized properly")
-        return False
+        print("WARNING: ONNX session not available - SHAP analysis will be skipped")
+        # Still generate Y_hat for basic analysis if possible from PKL data
+        Y_hat_train = None
+        Y_hat_valid = None
     
     # Get variable names
     input_indices = nn["NeuralNetworkModel"]["inputEntryIndices"]
@@ -238,7 +292,7 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     print(f"\nDataset Information:")
     print(f"Training samples: {X_train.shape[0]:,}")
     print(f"Validation samples: {X_valid.shape[0]:,}")
@@ -281,22 +335,32 @@ def visualize_NN_results(pkl_file=None, output_dir="visualizations", latex_var_n
     
     # Generate the two essential scientific plots
     print(f"\n")
-    
+
     # 1. Training Error History Plot
     create_training_convergence_plot(loss_history, output_dir)
-    
+
     # 2. SHAP Analysis Plot (using ONNX model predictions for explainability)
-    create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid, 
-                             input_names, output_names, output_dir, onnx_session,
-                             input_names_display, output_names_display)
+    if enable_shap:
+        if onnx_session is not None:
+            create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid,
+                                     input_names, output_names, output_dir, onnx_session,
+                                     input_names_display, output_names_display, onnx_file, shap_max_samples)
+        else:
+            print("[WARNING] SHAP analysis enabled in configuration but ONNX session unavailable")
+            print("          Skipping SHAP analysis - only training convergence plot generated")
+    else:
+        print("[INFO] SHAP analysis disabled in configuration")
     
     print(f"\nVisualization complete! Files saved in '{output_dir}/' directory:")
     print(f"   - training_convergence.png (Training error history)")
-    print(f"   - shap_analysis_[output].png (SHAP beeswarm plots)")
-    print(f"   - shap_importance_[output].png (SHAP feature importance)")
+    print(f"   - training_convergence.pdf (PDF version)")
+    if enable_shap and onnx_session is not None:
+        print(f"   - shap_analysis_[output].png (SHAP beeswarm plots)")
+        print(f"   - shap_importance_[output].png (SHAP feature importance)")
     print(f"   - training_convergence_data.txt (Training data)")
     
     return True
+
 
 
 def create_training_convergence_plot(loss_history, output_dir):
@@ -416,9 +480,35 @@ def create_training_convergence_plot(loss_history, output_dir):
             f.write(f"{i}\t{loss:.10e}\t{smooth:.10e}\n")
 
 
-def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid, 
+def create_training_data_export(loss_history, output_dir):
+    """
+    Export training convergence data to a text file for external analysis.
+    """
+    from scipy import signal
+
+    # Generate data file with training history
+    with open(f"{output_dir}/training_convergence_data.txt", 'w') as f:
+        f.write("Epoch\tLoss_Value\tSmoothed_Trend\n")
+
+        # Calculate smoothed values for data file
+        if len(loss_history) > 50:
+            window_length = min(51, len(loss_history) // 15)
+            if window_length % 2 == 0:
+                window_length += 1
+            if window_length >= 3:
+                smoothed = signal.savgol_filter(loss_history, window_length, 3)
+            else:
+                smoothed = loss_history
+        else:
+            smoothed = loss_history
+
+        for i, (loss, smooth) in enumerate(zip(loss_history, smoothed), 1):
+            f.write(f"{i}\t{loss:.10e}\t{smooth:.10e}\n")
+
+
+def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid,
                              input_names, output_names, output_dir, onnx_session,
-                             input_names_display, output_names_display):
+                             input_names_display, output_names_display, onnx_file, max_samples=500):
     """
     Create SHAP (SHapley Additive exPlanations) analysis plots for neural network explanability.
     
@@ -441,8 +531,7 @@ def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid,
     Y_combined_temp = np.vstack([Y_train, Y_valid])
     
     # Use ONNX file timestamp and combined data shape for cache key
-    onnx_mtime = os.path.getmtime(os.path.join(os.getcwd(), 
-        [f for f in os.listdir('.') if f.startswith('Trained_DNN_') and f.endswith('.onnx')][0]))
+    onnx_mtime = os.path.getmtime(onnx_file)
     cache_key = f"{X_combined_temp.shape}_{Y_combined_temp.shape}_{onnx_mtime}"
     cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
     cache_file = os.path.join(output_dir, f"shap_cache_{cache_hash}.pkl")
@@ -502,26 +591,13 @@ def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid,
         X_combined = np.vstack([X_train, X_valid])
         Y_combined = np.vstack([Y_train, Y_valid])
         
-        # Interactive sample size selection
-        max_samples = len(X_combined)
-        print(f"Total available samples (train + test): {max_samples:,}")
-        
-        try:
-            user_input = input(f"Enter number of samples for SHAP analysis (0-{max_samples}): ")
-            n_samples = int(float(user_input))  # Convert to float first to handle decimals, then to int
-            
-            # Validate and clamp the input
-            if n_samples < 0:
-                n_samples = 0
-            elif n_samples > max_samples:
-                n_samples = max_samples
-                
-            print(f"Using {n_samples} samples for SHAP analysis")
-            
-        except (ValueError, KeyboardInterrupt):
-            # Default fallback if input is invalid or user cancels
-            n_samples = min(500, max_samples)
-            print(f"Invalid input or cancelled. Using default: {n_samples} samples")
+        # Automatic sample size selection for SHAP analysis
+        max_samples_available = len(X_combined)
+        print(f"Total available samples (train + test): {max_samples_available:,}")
+
+        # Use configured sample size limit for reasonable computation time
+        n_samples = min(max_samples, max_samples_available)
+        print(f"Using {n_samples} samples for SHAP analysis (max configured: {max_samples})")
         
         X_sample = X_combined[:n_samples]
         
@@ -808,7 +884,7 @@ def create_shap_analysis_plot(X_train, Y_train, X_valid, Y_valid,
             print(f"\nDetailed breakdown of grouped features:")
             for i, (orig_name, orig_importance) in enumerate(zip(grouped_names, grouped_importance_values)):
                 print(f"    {orig_name:25}: {orig_importance:.6f}")
-            print(f"    → Average of grouped features: {grouped_importance_mean:.6f}")
+            print(f"    -> Average of grouped features: {grouped_importance_mean:.6f}")
         
     
     print(f"\n" + "="*80)

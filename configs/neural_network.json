@@ -11,6 +11,10 @@
         "Delimiter": ",",
         "ShowTestEvery": 500
     },
+    "Visualizations": {
+        "enable_shap_analysis": true,
+        "shap_max_samples": 200
+    },
     "FirstHiddenLayer": {
         "neurons": 7, "activation": "elu"
     },

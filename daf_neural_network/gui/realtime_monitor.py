@@ -1927,18 +1927,24 @@ class RealTimeTableGUI:
             for model_id in deletable_models:
                 # Mark as deleted
                 self.deleted_models.add(model_id)
-                
+
+                # Update external pause state for process manager
+                if self.external_pause_state:
+                    # Add to shared deleted list so process manager can remove from queue
+                    if "deleted" in self.external_pause_state:
+                        self.external_pause_state["deleted"].append(model_id)
+
                 # Remove from GUI table
                 if model_id in self.table_items:
                     item = self.table_items[model_id]
                     self.tree.delete(item)
                     del self.table_items[model_id]
                     deleted_count += 1
-                
+
                 # Remove from model data
                 if model_id in self.model_data:
                     del self.model_data[model_id]
-                
+
                 # Remove from other tracking lists
                 self.paused_models.discard(model_id)
             
@@ -2059,17 +2065,23 @@ class RealTimeTableGUI:
             
             # Mark as deleted
             self.deleted_models.add(model_id)
-            
+
+            # Update external pause state for process manager
+            if self.external_pause_state:
+                # Add to shared deleted list so process manager can remove from queue
+                if "deleted" in self.external_pause_state:
+                    self.external_pause_state["deleted"].append(model_id)
+
             # Remove from GUI table
             if model_id in self.table_items:
                 item = self.table_items[model_id]
                 self.tree.delete(item)
                 del self.table_items[model_id]
-            
+
             # Remove from model data
             if model_id in self.model_data:
                 del self.model_data[model_id]
-            
+
             # Remove from other tracking lists
             self.paused_models.discard(model_id)
             
